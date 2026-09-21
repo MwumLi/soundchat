@@ -33,16 +33,52 @@ node tools/cli.mjs encode "你好" out.wav     # 生成声波 WAV
 afplay out.wav                                # macOS 播放
 ```
 
-### 方式二：两台电脑
+### 方式二：两台电脑（同一台机器上开发调试）
 
 ```bash
 node tools/serve.mjs
 ```
 
-然后两台电脑的浏览器都打开 `http://localhost:8080/`，各自点「开始监听」，再点「配对」。
+浏览器打开 `http://localhost:8080/`，点「开始监听」，再点「配对」。
 
-> 注意：`localhost` 是浏览器认定的安全上下文，麦克风权限可用。
-> 用 `http://192.168.x.x` 这种局域网 IP 打开会**拿不到麦克风权限**，必须用 `https://`。
+### ⚠️ 为什么不能让"一台跑服务、另一台走局域网 IP 访问"
+
+这是最容易踩的坑。**服务只负责把网页送过去，跟聊天数据毫无关系**——
+数据全程走声波。但麦克风权限会被浏览器拦下：
+
+| 打开方式 | 是安全上下文吗 | 能拿到麦克风吗 |
+|---|---|---|
+| `https://...` | ✅ | ✅ |
+| `http://localhost:8080` | ✅ | ✅ |
+| `file:///.../soundchat.html` | ✅ | ✅ |
+| `http://10.91.145.249:8080` | ❌ | ❌ `navigator.mediaDevices` 直接是 `undefined` |
+
+按 [MDN 的定义](https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Secure_Contexts)，
+只有 `https` / `wss` / `file` 协议，以及主机名是 `localhost` 或 `127.0.0.0/8`、`::1/128` 的才算安全上下文。
+**局域网 IP 不在其中**，所以跑服务那台（localhost）能用，另一台（局域网 IP）拿不到麦克风。
+
+本机实测（Chrome headless）：
+
+```
+file:///.../soundchat.html          → isSecureContext: true,  mediaDevices: ✅
+http://localhost:8099/...           → isSecureContext: true,  mediaDevices: ✅
+http://10.91.145.249:8099/...       → 该机器上连自己的局域网 IP 都访问不通（见下）
+```
+
+> 附加发现：这台 Mac 上 `curl --noproxy '*' http://10.91.145.249:8099/` 返回 `000`（而 localhost 返回 `200`），
+> Chrome 同样打不开。可能是无线网络的客户端隔离或企业管控。
+> 也就是说，即便绕过权限问题，局域网互访在这台机器所在的网络上也未必通。
+
+**所以正确做法是：不要用服务。** 见方式三，两台设备各自本地打开同一个单文件即可。
+
+如果确实想走局域网，只有三条路（都不推荐）：
+
+1. 给服务器配 HTTPS 证书。iOS 需要在设置里手动信任证书；Android Chrome 对"证书有错误"的页面仍视为非安全上下文。
+2. 桌面 Chrome 加启动参数把局域网 IP 临时当作安全源（**仅限桌面，手机不行**）：
+   ```bash
+   open -a "Google Chrome" --args --unsafely-treat-insecure-origin-as-secure=http://10.91.145.249:8080
+   ```
+3. 内网 DNS 指一个域名到那台机器 + 配真证书（企业内网常见做法）。
 
 ### 方式三：电脑 + 手机（推荐用法）
 
@@ -54,7 +90,8 @@ node build.mjs        # 生成 dist/soundchat.html（约 60 KB，零依赖、全
 
 把 `dist/soundchat.html` 用任意方式传到手机（微信文件传输助手 / 邮件 / 数据线 / 云盘都行），然后：
 
-- **Android**：用 Chrome 打开 `file://` 文件通常可以拿到麦克风权限
+- **Android**：Chrome 把 `file://` 当安全上下文（本机实测 `isSecureContext: true`、`mediaDevices` 可用），
+  用文件管理器打开这个 HTML 即可
 - **iOS**：Safari 在 `file://` 下**不给麦克风权限**。需要把这个 HTML 放到任意 `https://` 静态托管上（GitHub Pages、内网 nginx 都行），用 Safari 打开后「添加到主屏幕」，之后就能离线用了
 
 > 这一步是唯一的"引导"环节——需要把文件本身送到手机上。
