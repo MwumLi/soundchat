@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f1115" />
+    <title>声波聊天 · SoundChat</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --panel2: #1e222b;
+        --line: #2a2f3a;
+        --fg: #e8eaed;
+        --dim: #9aa3b2;
+        --accent: #4f9cf9;
+        --ok: #3ecf8e;
+        --warn: #f5a623;
+        --err: #f26d6d;
+        --me: #2b4a7d;
+        --peer: #262b36;
+      }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font: 15px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        height: 100dvh;
+        overflow: hidden;
+      }
+      header {
+        flex: none;
+        padding: 10px 14px calc(10px + env(safe-area-inset-top)) 14px;
+        padding-top: calc(10px + env(safe-area-inset-top));
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .title { font-weight: 600; font-size: 15px; margin-right: auto; display: flex; align-items: center; gap: 7px; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+      .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+      .dot.tx { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+      .dot.err { background: var(--err); }
+      button, select, input {
+        font: inherit;
+        color: var(--fg);
+        background: var(--panel2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 7px 11px;
+        outline: none;
+      }
+      button:active { transform: scale(0.97); }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #07121f; font-weight: 600; }
+      button.ghost { background: transparent; }
+      button:disabled { opacity: 0.45; }
+      select { padding: 6px 8px; }
+      .sub { color: var(--dim); font-size: 12px; margin-top: 6px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+      #chat {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        -webkit-overflow-scrolling: touch;
+      }
+      .msg { max-width: 82%; padding: 8px 12px; border-radius: 14px; white-space: pre-wrap; word-break: break-word; position: relative; }
+      .msg .meta { font-size: 11px; color: var(--dim); margin-bottom: 3px; }
+      .msg.me { align-self: flex-end; background: var(--me); border-bottom-right-radius: 4px; }
+      .msg.peer { align-self: flex-start; background: var(--peer); border-bottom-left-radius: 4px; }
+      .msg.sys { align-self: center; background: transparent; color: var(--dim); font-size: 12px; max-width: 100%; text-align: center; padding: 2px 8px; }
+      .msg.err { align-self: center; background: rgba(242,109,109,0.12); color: var(--err); font-size: 12px; max-width: 100%; text-align: center; }
+
+      footer {
+        flex: none;
+        padding: 10px 12px calc(10px + env(safe-area-inset-bottom)) 12px;
+        background: var(--panel);
+        border-top: 1px solid var(--line);
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+      }
+      #text {
+        flex: 1 1 auto;
+        resize: none;
+        min-height: 40px;
+        max-height: 120px;
+        padding: 9px 11px;
+        line-height: 1.4;
+      }
+      #send { flex: none; height: 40px; padding: 0 18px; }
+
+      #logPanel { flex: none; max-height: 30dvh; overflow-y: auto; background: #0b0d11; border-top: 1px solid var(--line); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 8px 12px; display: none; }
+      #logPanel.show { display: block; }
+      #logPanel div { color: var(--dim); }
+      #logPanel .ok { color: var(--ok); }
+      #logPanel .warn { color: var(--warn); }
+      #logPanel .error { color: var(--err); }
+      #logPanel .tx { color: var(--accent); }
+
+      #meter { width: 60px; height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; border: 1px solid var(--line); }
+      #meterFill { height: 100%; width: 0%; background: var(--ok); transition: width 80ms linear; }
+      #overlay {
+        position: fixed; inset: 0; background: rgba(8,10,14,0.94); display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 18px; padding: 24px; text-align: center; z-index: 50;
+      }
+      #overlay.hide { display: none; }
+      #overlay h1 { margin: 0; font-size: 20px; }
+      #overlay p { margin: 0; color: var(--dim); max-width: 34em; font-size: 13px; line-height: 1.7; }
+      .hint { color: var(--dim); font-size: 12px; }
+      .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); color: var(--dim); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="row">
+        <div class="title"><span class="dot" id="dot"></span>声波聊天</div>
+        <select id="profile" title="传输档位"></select>
+        <button class="ghost" id="btnPair">配对</button>
+        <button class="ghost" id="btnLog">日志</button>
+      </div>
+      <div class="sub">
+        <span id="statusText">未启动</span>
+        <span class="pill" id="peerText">未配对</span>
+        <span class="pill" id="rateText"></span>
+        <span id="meter"><span id="meterFill"></span></span>
+      </div>
+    </header>
+
+    <div id="chat"></div>
+    <div id="logPanel"></div>
+
+    <footer>
+      <textarea id="text" placeholder="输入要发送的文字…" rows="1"></textarea>
+      <button class="primary" id="send">发送</button>
+    </footer>
+
+    <div id="overlay">
+      <h1>声波聊天</h1>
+      <p>
+        两台设备分别打开本页面，把音量调到合适大小，放在同一房间内（1–3 米），
+        点下面的按钮开始。之后文字会通过扬声器 → 麦克风直接传输，<b>不需要局域网、不需要蓝牙、不需要联网</b>。
+      </p>
+      <p class="hint">
+        需要授权麦克风。首次建议先用「自检」确认本机链路正常。<br />
+        提示：iOS 必须通过 https:// 或 localhost 打开，file:// 下浏览器不给麦克风权限。
+      </p>
+      <button class="primary" id="btnStart" style="font-size: 16px; padding: 12px 28px">开始监听</button>
+      <div class="row" style="justify-content: center">
+        <button class="ghost" id="btnSelfTest">自检</button>
+        <button class="ghost" id="btnWav">导出 WAV</button>
+      </div>
+    </div>
+
+    <script type="module" src="../src/app.js"></script>
+  </body>
+</html>
