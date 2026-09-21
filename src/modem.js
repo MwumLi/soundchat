@@ -277,6 +277,7 @@ export class AcousticReceiver {
     this._scratchCache = new Map();
 
     this.lastSignal = 0; // 最近一次扫描的最大列能量（UI 用）
+    this.level = 0; // 最近一次 push 生成列的最大总能量，供载波侦听用
   }
 
   /**
@@ -317,6 +318,7 @@ export class AcousticReceiver {
     this._tried.clear();
     this.decodeFloor = 0;
     this.lastSignal = 0;
+    this.level = 0;
   }
 
   /* ---------- 内部工具 ---------- */
@@ -429,6 +431,7 @@ export class AcousticReceiver {
 
     // 生成新的符号能量列
     const maxStart = this.written - this.winLen;
+    let lvl = 0;
     while (this.colNextAbs <= maxStart) {
       const e = Float64Array.from(this._toneBank(this.colNextAbs + this.winLen / 2, this.winLen, false));
       let tot = 0;
@@ -436,8 +439,10 @@ export class AcousticReceiver {
       this.colAbs.push(this.colNextAbs);
       this.colE.push(e);
       this.colT.push(tot);
+      if (tot > lvl) lvl = tot;
       this.colNextAbs += this.hop;
     }
+    this.level = lvl; // 没有新列时为 0，表示这段音频是静音
 
     // 淘汰过老的数据
     const minAbs = this.written - this.cap + this.winLen + 2;
@@ -447,7 +452,10 @@ export class AcousticReceiver {
       this.colAbs.splice(0, drop);
       this.colE.splice(0, drop);
       this.colT.splice(0, drop);
+      // scanFrom / decodeFloor 都是「列下标」，淘汰后必须一起平移，
+      // 否则长会话（环形缓冲转一圈以后）扫描起点会越界，再也解不出帧。
       this.scanFrom = Math.max(0, this.scanFrom - drop);
+      this.decodeFloor = Math.max(0, this.decodeFloor - drop);
     }
 
     return this._tryDecode();
