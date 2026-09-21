@@ -1,0 +1,14 @@
+{
+  "name": "dsh-soundchat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "声波聊天：两台设备通过扬声器/麦克风互传文字，不依赖局域网与蓝牙",
+  "scripts": {
+    "test": "node test/modem.test.mjs && node test/protocol.test.mjs",
+    "build": "node build.mjs",
+    "serve": "node tools/serve.mjs",
+    "cli": "node tools/cli.mjs"
+  },
+  "engines": { "node": ">=18" }
+}
