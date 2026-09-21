@@ -135,7 +135,7 @@ function check(name, cond, extra = '') {
 
 /* ============================ 装配一对会话 ============================ */
 
-function setupPair({ shouldDrop, opts, randA, randB } = {}) {
+function setupPair({ shouldDrop, opts, randA, randB, idA = 1, idB = 2, nameA = '甲', nameB = '乙' } = {}) {
   const clock = new Clock();
   const stats = { txA: 0, txB: 0, dropped: 0 };
   const ch = makeChannel(clock, stats, shouldDrop);
@@ -148,8 +148,9 @@ function setupPair({ shouldDrop, opts, randA, randB } = {}) {
   ch.peers.b = b;
 
   a.session = new ChatSession({
-    myId: 1,
-    myName: '甲',
+    myId: idA,
+    myName: nameA,
+    now: () => clock.now,
     transmit: ch.transmit('a', 'b'),
     timers: clock,
     opts: { ...opts, rand: randA },
@@ -157,8 +158,9 @@ function setupPair({ shouldDrop, opts, randA, randB } = {}) {
     onLog: (e) => logs.a.push(e),
   });
   b.session = new ChatSession({
-    myId: 2,
-    myName: '乙',
+    myId: idB,
+    myName: nameB,
+    now: () => clock.now,
     transmit: ch.transmit('b', 'a'),
     timers: clock,
     opts: { ...opts, rand: randB },
@@ -352,6 +354,38 @@ group('8. 载波侦听：双方同时起发时，退避 + 让行保证都能送�
   check('乙的消息送达', inbox.a.length === 1, `实收 ${inbox.a.length}`);
   check('甲正文正确', inbox.b[0]?.text === '甲先开口', JSON.stringify(inbox.b[0]?.text));
   check('乙正文正确', inbox.a[0]?.text === '乙也想同时开口', JSON.stringify(inbox.a[0]?.text));
+}
+
+/* ============================ 9. 设备 ID 冲突 ============================ */
+
+group('9. 设备 ID 冲突自动检测（同机两个 tab 共用身份时会撞车）');
+
+{
+  // 两端都用 id=1，模拟「同一个浏览器两个 tab 拿到了同一个设备 ID」
+  const { clock, a, b, inbox } = setupPair({ idA: 1, idB: 1, nameA: '设备1', nameB: '设备1' });
+  let collisions = 0;
+  a.session.onIdCollision = () => {
+    collisions++;
+    a.session.setId(2); // 换一个 ID 重新配对
+    a.session.pair();
+  };
+  b.session.onIdCollision = () => {
+    collisions++;
+  };
+
+  a.session.start();
+  await clock.advance(3000); // 错开启动时间，模拟真实的两个 tab
+  b.session.start();
+  await clock.advance(30000);
+
+  check('检测到了 ID 冲突', collisions > 0, `触发 ${collisions} 次`);
+  check('冲突方已换 ID', a.session.myId === 2, `现在 id=${a.session.myId}`);
+  check('换 ID 后成功配对', a.session.paired && b.session.paired, `a.peer=${a.session.peerId} b.peer=${b.session.peerId}`);
+
+  a.session.say('换过 ID 之后应该能正常聊天');
+  await clock.advance(30000);
+  check('换 ID 后消息能送达', inbox.b.length === 1, `实收 ${inbox.b.length}`);
+  check('正文正确', inbox.b[0]?.text === '换过 ID 之后应该能正常聊天', JSON.stringify(inbox.b[0]?.text));
 }
 
 /* ============================ 汇总 ============================ */

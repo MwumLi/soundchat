@@ -33,6 +33,7 @@ const el = {
   btnPair: $('btnPair'),
   btnLog: $('btnLog'),
   statusText: $('statusText'),
+  meText: $('meText'),
   peerText: $('peerText'),
   rateText: $('rateText'),
   meterFill: $('meterFill'),
@@ -63,6 +64,7 @@ const state = {
   myId: 0,
   myName: '',
   lastTick: 0,
+  lastClipWarn: 0,
 };
 
 /* ============================ 工具 ============================ */
@@ -77,6 +79,29 @@ function localGet(k, d) {
 function localSet(k, v) {
   try {
     localStorage.setItem(k, v);
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/**
+ * 设备身份必须存在 sessionStorage，不能存 localStorage。
+ *
+ * localStorage 是同一个浏览器所有 tab 共享的 —— 存那里会导致
+ * 同一台机器开两个 tab 时两边拿到同一个设备 ID，于是各自把对方的帧
+ * 当成"自己的回声"丢掉，永远配不上对（实测复现过）。
+ * sessionStorage 是按 tab 隔离的，正好。
+ */
+function sessGet(k, d) {
+  try {
+    return sessionStorage.getItem(k) ?? d;
+  } catch {
+    return d;
+  }
+}
+function sessSet(k, v) {
+  try {
+    sessionStorage.setItem(k, v);
   } catch {
     /* 忽略 */
   }
@@ -131,14 +156,19 @@ function setStatus(s, info = {}) {
 
 /* ============================ 设备身份 ============================ */
 
+function randomId() {
+  return 1 + Math.floor(Math.random() * 254);
+}
+
 function initIdentity() {
-  let id = parseInt(localGet('sc.id', '0'), 10);
+  let id = parseInt(sessGet('sc.id', '0'), 10);
   if (!id || id < 1 || id > 254) {
-    id = 1 + Math.floor(Math.random() * 254);
-    localSet('sc.id', String(id));
+    id = randomId();
+    sessSet('sc.id', String(id));
   }
   state.myId = id;
-  state.myName = localGet('sc.name', '') || `设备${id}`;
+  state.myName = sessGet('sc.name', '') || `设备${id}`;
+  if (el.meText) el.meText.textContent = `我：${state.myName}`;
 }
 
 /* ============================ 音频 ============================ */
@@ -178,6 +208,8 @@ async function startAudio() {
   return state.ctx.sampleRate;
 }
 
+const now2 = () => Date.now();
+
 function onAudio(e) {
   if (state.txActive || !state.rx) return;
   const input = e.inputBuffer.getChannelData(0);
@@ -190,7 +222,12 @@ function onAudio(e) {
   state.session.setCarrierBusy(normLevel() > CARRIER_THRESHOLD);
 
   // 电平表
-  const lv = Math.min(1, normLevel() / 0.7);
+  const raw = normLevel();
+  const lv = Math.min(1, raw / 0.7);
+  if (raw > 0.95 && now2() - state.lastClipWarn > 8000) {
+    state.lastClipWarn = now2();
+    addLog('warn', '输入电平接近满幅，可能削波失真；同机双开时请把音量调小一些');
+  }
   el.meterFill.style.width = `${(lv * 100).toFixed(0)}%`;
   el.meterFill.style.background = lv > 0.5 ? 'var(--accent)' : 'var(--ok)';
 
@@ -269,6 +306,22 @@ async function boot() {
     },
     onStatus: setStatus,
     onLog: (e) => addLog(e.level, e.text),
+    onIdCollision: () => {
+      // 对端用了同一个设备 ID（例如同一个浏览器开了两个 tab 但身份没隔离）。
+      // 换一个 ID 并重新配对，否则双方会一直把对方的消息当自己的回声丢掉。
+      const old = state.myId;
+      let id = randomId();
+      while (id === old) id = randomId();
+      state.myId = id;
+      state.myName = `设备${id}`;
+      sessSet('sc.id', String(id));
+      sessSet('sc.name', state.myName);
+      if (el.meText) el.meText.textContent = `我：${state.myName}`;
+      state.session.setId(id);
+      addLog('warn', `检测到设备 ID 冲突（对端也叫设备${old}），已自动改为 ${state.myName} 并重新配对`);
+      addMsg('sys', `设备 ID 撞车了，已自动改名为「${state.myName}」并重新配对`);
+      state.session.pair();
+    },
   });
 
   state.session.start();

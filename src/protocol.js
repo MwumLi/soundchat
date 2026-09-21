@@ -48,6 +48,7 @@ export class ChatSession {
     this.onPeer = o.onPeer || (() => {});
     this.onStatus = o.onStatus || (() => {});
     this.onLog = o.onLog || (() => {});
+    this.onIdCollision = o.onIdCollision || (() => {});
     this.timers = o.timers || defaultTimers;
     const op = o.opts || {};
 
@@ -60,8 +61,10 @@ export class ChatSession {
     this.txJitter = op.txJitter ?? 350; // 起发前随机退避，降低双方同时开口的概率
     this.deferMs = op.deferMs ?? 220; // 侦听到对端在发时，让行后重试的间隔
     this.carrierBusy = false;
+    this._lastTxEndAt = 0;
     this._deferTimer = null;
     this._rand = op.rand || Math.random;
+    this._now = o.now || (() => Date.now());
 
     this.state = STATE.IDLE;
     this.peerId = 0;
@@ -98,6 +101,11 @@ export class ChatSession {
     this.helloTimer = null;
     this.ackTimer = null;
     this._deferTimer = null;
+  }
+
+  /** 更换本机 id（检测到 id 冲突时用） */
+  setId(id) {
+    this.myId = id & 0xff;
   }
 
   /** 主动发起配对（重新广播 HELLO） */
@@ -141,7 +149,13 @@ export class ChatSession {
 
   /** 解调器解出一帧后调用 */
   onFrame(frame) {
-    if (frame.src === this.myId) return; // 自己的回声
+    if (frame.src === this.myId) {
+      // 自己的回声（正在发或刚发完），正常忽略；
+      // 但如果早就没在发声了还收到「自己的」帧，说明对端用了同一个设备 ID，
+      // 必须上报，否则双方会互相把对方的消息当回声丢掉、永远聊不上。
+      if (this._now() - this._lastTxEndAt > 1500) this.onIdCollision(frame);
+      return;
+    }
     if (frame.dst !== 0 && frame.dst !== this.myId) return; // 不是发给我的
 
     this._log('rx', `收到 type=${this._typeName(frame.type)} seq=${frame.seq} src=${frame.src} ${frame.payload.length}B`);
@@ -208,7 +222,7 @@ export class ChatSession {
       this._log('info', `重复分片 ${msgId}#${chunk}，已忽略但补发 ACK`);
       return;
     }
-    this.seen.set(key, Date.now());
+    this.seen.set(key, this._now());
     if (this.seen.size > 400) {
       const first = this.seen.keys().next().value;
       this.seen.delete(first);
@@ -216,7 +230,7 @@ export class ChatSession {
 
     let rec = this.rxMsgs.get(msgId);
     if (!rec) {
-      rec = { total, parts: new Map(), at: Date.now(), from: frame.src };
+      rec = { total, parts: new Map(), at: this._now(), from: frame.src };
       this.rxMsgs.set(msgId, rec);
     }
     rec.parts.set(chunk, data);
@@ -232,7 +246,7 @@ export class ChatSession {
         off += part.length;
       }
       this.rxMsgs.delete(msgId);
-      this.onMessage({ from: this.peerName || `设备${rec.from}`, text: bytesToText(bytes), at: Date.now() });
+      this.onMessage({ from: this.peerName || `设备${rec.from}`, text: bytesToText(bytes), at: this._now() });
     }
   }
 
@@ -313,6 +327,7 @@ export class ChatSession {
     try {
       await this.transmit(bytes);
     } finally {
+      this._lastTxEndAt = this._now();
       if (this.state === STATE.TX) this._setState(STATE.IDLE);
     }
   }
@@ -398,7 +413,7 @@ export class ChatSession {
   /* ============================ 维护 ============================ */
 
   /** 清理超时未收全的消息；需要外部周期性调用（或由 push 循环驱动） */
-  tick(now = Date.now()) {
+  tick(now = this._now()) {
     for (const [msgId, rec] of this.rxMsgs) {
       if (now - rec.at > this.rxMsgTimeout) {
         this._log('warn', `消息 ${msgId} 分片超时未收全（${rec.parts.size}/${rec.total}），丢弃`);
