@@ -45,6 +45,7 @@ const el = {
   btnStart: $('btnStart'),
   btnClear: $('btnClear'),
   btnSelfTest: $('btnSelfTest'),
+  selfTestResult: $('selfTestResult'),
   btnWav: $('btnWav'),
 };
 
@@ -394,6 +395,10 @@ async function boot() {
 function selfTest() {
   const p = PROFILES[state.profileKey];
   const fs = state.ctx ? state.ctx.sampleRate : 48000;
+  // 先把结果清掉并给出"正在跑"的反馈：遮罩挡着聊天区、日志面板默认隐藏，
+  // 结果只写那两处的话用户点完会以为没反应（这就是之前的 bug）。
+  el.selfTestResult.className = '';
+  el.selfTestResult.textContent = '自检中…';
   const text = '自检：声波链路正常 123';
   const bytes = buildFrame({ type: FRAME.MSG, seq: 1, src: 1, dst: 2, payload: textToBytes(text) });
   const wav = modulate(bytes, p, fs);
@@ -406,8 +411,13 @@ function selfTest() {
   for (const f of rx.flush()) out.push(f);
   const ms = (performance.now() - t0).toFixed(0);
   const ok = out.length === 1 && bytesToText(out[0].payload) === text;
+  const detail = ok
+    ? `✓ 自检通过 · ${p.label}档 · ${wav.length} 采样 · 解码 ${ms}ms`
+    : `✗ 自检失败 · ${p.label}档 · 解出 ${out.length} 帧（应为 1 帧），请点「日志」看细节`;
+  el.selfTestResult.className = ok ? 'ok' : 'err';
+  el.selfTestResult.textContent = detail;
   addLog(ok ? 'ok' : 'error', `自检 ${ok ? '通过' : '失败'}：${p.label}档，${wav.length} 采样，解码耗时 ${ms}ms`);
-  addMsg(ok ? 'sys' : 'err', ok ? `自检通过（${p.label}档，解码 ${ms}ms）` : '自检失败，请查看日志', '', false);
+  addMsg(ok ? 'sys' : 'err', detail, '', false);
 }
 
 function exportWav() {
