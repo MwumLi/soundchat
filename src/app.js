@@ -608,7 +608,7 @@ async function boot() {
   });
 
   state.session.start();
-  el.overlay.classList.add('hide');
+  el.overlay.classList.add('hidden'); // 注意是 .hidden；v2 重写时误写成 .hide（无对应 CSS 规则），遮罩永远盖着
   showConversation(0);
   addLog('info', '已进入静默监听状态，不会自动发声。');
   renderDevices();

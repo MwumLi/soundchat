@@ -95,6 +95,24 @@ check(`app.js 引用的 ${usedIds.length} 个 DOM id 都存在`, missing.length 
   check('产物包含全部 src 模块', absent.length === 0, absent.length ? `缺少 ${absent.join(', ')}` : `${markers.length} 个模块都在`);
 }
 
+/* ---------- 3c. JS 里 classList 操作的 class 必须有 CSS 规则 ---------- */
+// 拦「加了 class 但 CSS 里没这个规则」：不会报错、不会抛异常，
+// 只是那个元素永远不会变成预期样式 —— 曾经因此让启动遮罩永远盖着页面。
+{
+  const cssText = (html.match(/<style>([\s\S]*?)<\/style>/) || ['', ''])[1];
+  const used = new Set();
+  for (const f of ['src/app.js', 'src/protocol.js']) {
+    const src = readFileSync(join(ROOT, f), 'utf8');
+    for (const m of src.matchAll(/classList\.(?:add|remove|toggle)\('([^']+)'/g)) used.add(m[1]);
+  }
+  const wild = [...used].filter((c) => !new RegExp(`\\.${c}(?![\\w-])`).test(cssText));
+  check(
+    `classList 用到的 ${used.size} 个 class 都有 CSS 规则`,
+    wild.length === 0,
+    wild.length ? `没有规则: ${wild.join(', ')}` : ''
+  );
+}
+
 /* ---------- 4. 用最小 DOM 桩跑一遍 bundle ---------- */
 
 const requestedIds = [];
