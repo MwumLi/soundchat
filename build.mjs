@@ -13,7 +13,27 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const SRC = ['src/modem.js', 'src/protocol.js', 'src/app.js'];
+/**
+ * 入口文件。依赖顺序由 resolveSrc 自动推导 —— 之前手写数组漏了 store.js，
+ * 单文件产物运行到一半才报 "xxx is not defined"，所以改成自动扫描。
+ */
+const ENTRY = 'src/app.js';
+
+/** 按 import 关系递归收集依赖（被依赖的排在前面） */
+async function resolveSrc(entry) {
+  const seen = new Set();
+  const out = [];
+  async function visit(file) {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const code = await readFile(join(ROOT, file), 'utf8');
+    const deps = [...code.matchAll(/^import\s+[\s\S]*?from\s+['"](\.\/[^'"]+)['"];?/gm)].map((m) => m[1]);
+    for (const d of deps) await visit(join(dirname(file), d).replace(/\\/g, '/'));
+    out.push(file);
+  }
+  await visit(entry);
+  return out;
+}
 
 /** 去掉 ESM 语法，让多文件能拼成一个普通脚本 */
 function stripModule(code, name) {
@@ -29,6 +49,7 @@ function stripModule(code, name) {
 
 async function main() {
   const html = await readFile(join(ROOT, 'web/index.html'), 'utf8');
+  const SRC = await resolveSrc(ENTRY);
   const parts = [];
   for (const f of SRC) {
     parts.push(stripModule(await readFile(join(ROOT, f), 'utf8'), f));

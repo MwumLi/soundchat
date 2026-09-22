@@ -62,6 +62,39 @@ const usedIds = [...appSrc.matchAll(/\$\('([^']+)'\)/g)].map((x) => x[1]);
 const missing = usedIds.filter((id) => !htmlIds.has(id));
 check(`app.js 引用的 ${usedIds.length} 个 DOM id 都存在`, missing.length === 0, missing.join(','));
 
+/* ---------- 3b. 所有被 import 的名字都必须在合并后的产物里有定义 ---------- */
+// 拦「build 漏了某个模块」：漏掉时 import 被剥掉、模块代码没进来，
+// 静态检查能立刻发现，而 DOM 桩不一定碰得到那些函数。
+{
+  const srcFiles = ['src/modem.js', 'src/protocol.js', 'src/store.js', 'src/app.js'];
+  const all = srcFiles.map((f) => readFileSync(join(ROOT, f), 'utf8')).join('\n');
+  const names = new Set();
+  for (const f of srcFiles) {
+    const code = readFileSync(join(ROOT, f), 'utf8');
+    for (const m of code.matchAll(/^import\s+\{([\s\S]*?)\}\s+from\s+['"][^'"]+['"]/gm)) {
+      for (const raw of m[1].split(',')) {
+        const name = raw.trim().split(/\s+as\s+/).pop().trim();
+        if (name) names.add(name);
+      }
+    }
+  }
+  const undeclared = [...names].filter((n) => {
+    const re = new RegExp(`\\b(?:const|let|var|function|class)\\s+${n}\\b`);
+    return !re.test(all);
+  });
+  check(`每个 import 的名字都有定义（共 ${names.size} 个）`, undeclared.length === 0, undeclared.slice(0, 4).join(', '));
+
+  // 产物里必须包含所有 src 模块的标志性内容
+  const markers = [
+    ['src/modem.js', 'AcousticReceiver'],
+    ['src/protocol.js', 'ChatSession'],
+    ['src/store.js', 'appendHistory'],
+    ['src/app.js', '__soundchat'],
+  ];
+  const absent = markers.filter(([, m]) => !code.includes(m)).map(([f]) => f);
+  check('产物包含全部 src 模块', absent.length === 0, absent.length ? `缺少 ${absent.join(', ')}` : `${markers.length} 个模块都在`);
+}
+
 /* ---------- 4. 用最小 DOM 桩跑一遍 bundle ---------- */
 
 const requestedIds = [];
