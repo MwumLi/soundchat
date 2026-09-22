@@ -135,7 +135,7 @@ function check(name, cond, extra = '') {
 
 /* ============================ 装配一对会话 ============================ */
 
-function setupPair({ shouldDrop, opts, randA, randB, idA = 1, idB = 2, nameA = '甲', nameB = '乙' } = {}) {
+function setupPair({ shouldDrop, opts, randA, randB, idA = 1, idB = 2, nameA = '甲', nameB = '乙', nonceA, nonceB } = {}) {
   const clock = new Clock();
   const stats = { txA: 0, txB: 0, dropped: 0 };
   const ch = makeChannel(clock, stats, shouldDrop);
@@ -151,6 +151,7 @@ function setupPair({ shouldDrop, opts, randA, randB, idA = 1, idB = 2, nameA = '
     myId: idA,
     myName: nameA,
     now: () => clock.now,
+    nonce: nonceA,
     transmit: ch.transmit('a', 'b'),
     timers: clock,
     opts: { ...opts, rand: randA },
@@ -161,6 +162,7 @@ function setupPair({ shouldDrop, opts, randA, randB, idA = 1, idB = 2, nameA = '
     myId: idB,
     myName: nameB,
     now: () => clock.now,
+    nonce: nonceB,
     transmit: ch.transmit('b', 'a'),
     timers: clock,
     opts: { ...opts, rand: randB },
@@ -358,28 +360,38 @@ group('8. 载波侦听：双方同时起发时，退避 + 让行保证都能送�
 
 /* ============================ 9. 设备 ID 冲突 ============================ */
 
-group('9. 设备 ID 冲突自动检测（同机两个 tab 共用身份时会撞车）');
+group('9. 设备 ID 冲突：用 nonce 无歧义裁决谁让位');
 
 {
-  // 两端都用 id=1，模拟「同一个浏览器两个 tab 拿到了同一个设备 ID」
-  const { clock, a, b, inbox } = setupPair({ idA: 1, idB: 1, nameA: '设备1', nameB: '设备1' });
-  let collisions = 0;
+  // 两端 id 都是 1（模拟同一浏览器两个 tab 共用持久身份），
+  // A 的 nonce 更小 → 由 A 让位；B 必须原地不动，保住持久身份。
+  const { clock, a, b, inbox } = setupPair({
+    idA: 1,
+    idB: 1,
+    nameA: '设备1',
+    nameB: '设备1',
+    nonceA: 100,
+    nonceB: 200,
+  });
+  let aCollide = 0;
+  let bCollide = 0;
   a.session.onIdCollision = () => {
-    collisions++;
-    a.session.setId(2); // 换一个 ID 重新配对
+    aCollide++;
+    a.session.setId(2); // 让位方换 ID（应用层只写本 tab 的覆盖，不动持久身份）
     a.session.pair();
   };
   b.session.onIdCollision = () => {
-    collisions++;
+    bCollide++;
   };
 
   a.session.start();
-  await clock.advance(3000); // 错开启动时间，模拟真实的两个 tab
+  await clock.advance(3000); // 错开启动，模拟真实的两个 tab
   b.session.start();
   await clock.advance(30000);
 
-  check('检测到了 ID 冲突', collisions > 0, `触发 ${collisions} 次`);
-  check('冲突方已换 ID', a.session.myId === 2, `现在 id=${a.session.myId}`);
+  check('只有 nonce 小的一方让位', aCollide > 0 && bCollide === 0, `A 触发 ${aCollide} 次 / B 触发 ${bCollide} 次`);
+  check('让位方换了 ID', a.session.myId === 2, `A 现在 id=${a.session.myId}`);
+  check('未让位方身份保持不变', b.session.myId === 1, `B 现在 id=${b.session.myId}`);
   check('换 ID 后成功配对', a.session.paired && b.session.paired, `a.peer=${a.session.peerId} b.peer=${b.session.peerId}`);
 
   a.session.say('换过 ID 之后应该能正常聊天');

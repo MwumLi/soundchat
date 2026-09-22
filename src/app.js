@@ -43,6 +43,7 @@ const el = {
   send: $('send'),
   overlay: $('overlay'),
   btnStart: $('btnStart'),
+  btnClear: $('btnClear'),
   btnSelfTest: $('btnSelfTest'),
   btnWav: $('btnWav'),
 };
@@ -65,6 +66,7 @@ const state = {
   myName: '',
   lastTick: 0,
   lastClipWarn: 0,
+  nonce: 0,
 };
 
 /* ============================ 工具 ============================ */
@@ -85,12 +87,14 @@ function localSet(k, v) {
 }
 
 /**
- * 设备身份必须存在 sessionStorage，不能存 localStorage。
+ * 两层身份：
+ *   sc.id       localStorage   —— 这台机器的**持久身份**，跨 tab、跨会话稳定，
+ *                                 聊天记录按它归属，所以不能每个 tab 换一个。
+ *   sc.id.tab   sessionStorage —— 仅当本 tab 在 ID 撞车中"让位"时写入的临时覆盖。
  *
- * localStorage 是同一个浏览器所有 tab 共享的 —— 存那里会导致
- * 同一台机器开两个 tab 时两边拿到同一个设备 ID，于是各自把对方的帧
- * 当成"自己的回声"丢掉，永远配不上对（实测复现过）。
- * sessionStorage 是按 tab 隔离的，正好。
+ * 为什么不直接用 sessionStorage 当身份：那样每开一个 tab 就是一台新设备，
+ * 身份和历史都跟着碎掉。撞车问题改由 HELLO 里的 nonce 做无歧义裁决解决
+ * （nonce 小的让位），这样既保住了持久身份，同机双开也不会互抢。
  */
 function sessGet(k, d) {
   try {
@@ -112,7 +116,41 @@ function fmtTime(ms) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
 }
 
-function addMsg(kind, text, meta = '') {
+/* ============================ 聊天记录持久化 ============================ */
+
+const HISTORY_KEY = 'sc.history';
+const HISTORY_MAX = 300;
+
+function loadHistory() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushHistory(entry) {
+  const h = loadHistory();
+  h.push(entry);
+  while (h.length > HISTORY_MAX) h.shift();
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
+  } catch {
+    /* 配额满 / 隐私模式，忽略即可，不影响聊天 */
+  }
+}
+
+function clearHistory() {
+  try {
+    localStorage.removeItem(HISTORY_KEY);
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 只渲染，不落盘 */
+function renderMsg(kind, text, meta = '') {
   const div = document.createElement('div');
   div.className = `msg ${kind}`;
   if (meta) {
@@ -124,6 +162,11 @@ function addMsg(kind, text, meta = '') {
   div.appendChild(document.createTextNode(text));
   el.chat.appendChild(div);
   el.chat.scrollTop = el.chat.scrollHeight;
+}
+
+function addMsg(kind, text, meta = '', persist = true) {
+  renderMsg(kind, text, meta);
+  if (persist) pushHistory({ k: kind, t: text, m: meta, a: Date.now() });
 }
 
 function addLog(level, text) {
@@ -149,7 +192,7 @@ function setStatus(s, info = {}) {
   if (s === STATE.TX || s === STATE.WAIT_ACK) el.dot.classList.add('tx');
   else if (s === STATE.IDLE) el.dot.classList.add('on');
   if (info.error === 'no-ack') {
-    addMsg('err', '对方没有确认，这一条可能没送达（可以再发一次）');
+    addMsg('err', '对方没有确认，这一条可能没送达（可以再发一次）', '', false);
     el.dot.className = 'dot err';
   }
 }
@@ -161,13 +204,23 @@ function randomId() {
 }
 
 function initIdentity() {
-  let id = parseInt(sessGet('sc.id', '0'), 10);
+  // 优先用本 tab 的临时覆盖（说明这个 tab 之前让过位），否则用持久身份
+  let id = parseInt(sessGet('sc.id.tab', '0'), 10);
+  if (!id || id < 1 || id > 254) id = parseInt(localGet('sc.id', '0'), 10);
   if (!id || id < 1 || id > 254) {
     id = randomId();
-    sessSet('sc.id', String(id));
+    localSet('sc.id', String(id));
   }
   state.myId = id;
-  state.myName = sessGet('sc.name', '') || `设备${id}`;
+  state.myName = localGet('sc.name', '') || `设备${id}`;
+
+  // tab 内随机数：ID 撞车时用来裁决谁让位（协议层比较，大的让位）
+  let nonce = parseInt(sessGet('sc.nonce', '0'), 10);
+  if (!nonce) {
+    nonce = (Math.random() * 0xffffffff) >>> 0;
+    sessSet('sc.nonce', String(nonce));
+  }
+  state.nonce = nonce;
   if (el.meText) el.meText.textContent = `我：${state.myName}`;
 }
 
@@ -307,26 +360,32 @@ async function boot() {
     onStatus: setStatus,
     onLog: (e) => addLog(e.level, e.text),
     onIdCollision: () => {
-      // 对端用了同一个设备 ID（例如同一个浏览器开了两个 tab 但身份没隔离）。
-      // 换一个 ID 并重新配对，否则双方会一直把对方的消息当自己的回声丢掉。
+      // 协议层已经裁决过：走到这里说明本 tab 的 nonce 更大，由本 tab 让位。
+      // 只写 sessionStorage 覆盖，不动 localStorage 的持久身份 ——
+      // 否则会把另一个 tab（以及将来的会话）的身份一起改掉。
       const old = state.myId;
       let id = randomId();
       while (id === old) id = randomId();
       state.myId = id;
       state.myName = `设备${id}`;
-      sessSet('sc.id', String(id));
-      sessSet('sc.name', state.myName);
+      sessSet('sc.id.tab', String(id));
       if (el.meText) el.meText.textContent = `我：${state.myName}`;
       state.session.setId(id);
-      addLog('warn', `检测到设备 ID 冲突（对端也叫设备${old}），已自动改为 ${state.myName} 并重新配对`);
-      addMsg('sys', `设备 ID 撞车了，已自动改名为「${state.myName}」并重新配对`);
+      addLog('warn', `设备 ID 与另一个窗口撞车，本 tab 临时改用「${state.myName}」（持久身份仍是设备${old}）`);
+      addMsg('sys', `检测到另一个窗口也叫「设备${old}」，本窗口临时改名为「${state.myName}」`, '', false);
       state.session.pair();
     },
   });
 
   state.session.start();
   el.overlay.classList.add('hide');
-  addMsg('sys', '开始监听。把两台设备放在同一房间，点「配对」或直接发消息。');
+
+  const hist = loadHistory();
+  if (hist.length) {
+    for (const e of hist) renderMsg(e.k, e.t, e.m);
+    addMsg('sys', `已恢复 ${hist.length} 条本机聊天记录`, '', false);
+  }
+  addMsg('sys', '开始监听。把两台设备放在同一房间，点「配对」或直接发消息。', '', false);
   el.text.focus();
 }
 
@@ -348,7 +407,7 @@ function selfTest() {
   const ms = (performance.now() - t0).toFixed(0);
   const ok = out.length === 1 && bytesToText(out[0].payload) === text;
   addLog(ok ? 'ok' : 'error', `自检 ${ok ? '通过' : '失败'}：${p.label}档，${wav.length} 采样，解码耗时 ${ms}ms`);
-  addMsg(ok ? 'sys' : 'err', ok ? `自检通过（${p.label}档，解码 ${ms}ms）` : '自检失败，请查看日志');
+  addMsg(ok ? 'sys' : 'err', ok ? `自检通过（${p.label}档，解码 ${ms}ms）` : '自检失败，请查看日志', '', false);
 }
 
 function exportWav() {
@@ -447,6 +506,13 @@ el.btnPair.addEventListener('click', () => {
 
 el.btnLog.addEventListener('click', () => {
   el.logPanel.classList.toggle('show');
+});
+
+el.btnClear.addEventListener('click', () => {
+  if (!confirm('清空本机保存的聊天记录？\n（只影响这台设备的浏览器本地记录，不影响对方）')) return;
+  clearHistory();
+  el.chat.innerHTML = '';
+  addMsg('sys', '聊天记录已清空', '', false);
 });
 
 el.btnSelfTest.addEventListener('click', selfTest);

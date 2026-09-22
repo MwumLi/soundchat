@@ -49,6 +49,8 @@ export class ChatSession {
     this.onStatus = o.onStatus || (() => {});
     this.onLog = o.onLog || (() => {});
     this.onIdCollision = o.onIdCollision || (() => {});
+    // 本机随机数：ID 撞车时用来无歧义裁决"谁让位"。放在协议层，因为裁决规则要能单测。
+    this.nonce = (o.nonce ?? Math.floor(Math.random() * 0xffffffff)) >>> 0;
     this.timers = o.timers || defaultTimers;
     const op = o.opts || {};
 
@@ -150,10 +152,18 @@ export class ChatSession {
   /** 解调器解出一帧后调用 */
   onFrame(frame) {
     if (frame.src === this.myId) {
-      // 自己的回声（正在发或刚发完），正常忽略；
-      // 但如果早就没在发声了还收到「自己的」帧，说明对端用了同一个设备 ID，
-      // 必须上报，否则双方会互相把对方的消息当回声丢掉、永远聊不上。
-      if (this._now() - this._lastTxEndAt > 1500) this.onIdCollision(frame);
+      // 自己的回声（正在发或刚发完）直接忽略。但若早就没在发声了还收到「自己的」帧，
+      // 那就是对端用了同一个设备 ID —— 双方会互相把对方的消息当回声丢掉、永远聊不上。
+      // 只在 HELLO 上处理：它带 nonce，可以无歧义决定谁让位。
+      const isHello = frame.type === FRAME.HELLO || frame.type === FRAME.HELLO_ACK;
+      if (isHello && this._now() - this._lastTxEndAt > 1500) {
+        const their = this._readNonce(frame.payload);
+        if (their > this.nonce) {
+          this.onIdCollision({ nonce: their, src: frame.src });
+        } else {
+          this._log('info', `对端也叫设备${frame.src}，但它 nonce 更小，由它让位`);
+        }
+      }
       return;
     }
     if (frame.dst !== 0 && frame.dst !== this.myId) return; // 不是发给我的
@@ -187,8 +197,27 @@ export class ChatSession {
     }
   }
 
+  /** HELLO 载荷：[nonce 4 字节大端][昵称 utf8] */
+  _helloPayload() {
+    const name = textToBytes(this.myName);
+    const p = new Uint8Array(4 + name.length);
+    p[0] = (this.nonce >>> 24) & 0xff;
+    p[1] = (this.nonce >>> 16) & 0xff;
+    p[2] = (this.nonce >>> 8) & 0xff;
+    p[3] = this.nonce & 0xff;
+    p.set(name, 4);
+    return p;
+  }
+
+  _readNonce(payload) {
+    if (!payload || payload.length < 4) return 0;
+    return (((payload[0] << 24) | (payload[1] << 16) | (payload[2] << 8) | payload[3]) >>> 0);
+  }
+
   _onHello(frame, isAck) {
-    const name = frame.payload.length ? bytesToText(frame.payload) : `设备${frame.src}`;
+    const p = frame.payload;
+    this.peerNonce = this._readNonce(p);
+    const name = p.length > 4 ? bytesToText(p.subarray(4)) : p.length ? bytesToText(p) : `设备${frame.src}`;
     const known = this.paired && this.peerId === frame.src && this.peerName === name;
     this.peerId = frame.src;
     this.peerName = name;
@@ -289,13 +318,13 @@ export class ChatSession {
 
   _sendHello() {
     this._delayedSend(() =>
-      buildFrame({ type: FRAME.HELLO, seq: this._nextSeq(), src: this.myId, dst: 0, payload: textToBytes(this.myName) })
+      buildFrame({ type: FRAME.HELLO, seq: this._nextSeq(), src: this.myId, dst: 0, payload: this._helloPayload() })
     );
   }
 
   _sendHelloAck() {
     this._delayedSend(() =>
-      buildFrame({ type: FRAME.HELLO_ACK, seq: this._nextSeq(), src: this.myId, dst: this.peerId, payload: textToBytes(this.myName) })
+      buildFrame({ type: FRAME.HELLO_ACK, seq: this._nextSeq(), src: this.myId, dst: this.peerId, payload: this._helloPayload() })
     );
   }
 
