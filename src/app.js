@@ -61,6 +61,7 @@ const el = {
   scanHint: $('scanHint'),
   discoverList: $('discoverList'),
   peerList: $('peerList'),
+  btnClearAll: $('btnClearAll'),
   pinModal: $('pinModal'),
   pinTitle: $('pinTitle'),
   pinInput: $('pinInput'),
@@ -739,6 +740,14 @@ el.btnStopBcast.addEventListener('click', () => state.session && state.session.s
 el.btnLog.addEventListener('click', () => el.logPanel.classList.toggle('show'));
 el.btnSelfTest.addEventListener('click', selfTest);
 el.btnWav.addEventListener('click', exportWav);
+
+el.btnClearAll.addEventListener('click', () => {
+  if (!confirm('清空本机保存的全部聊天记录？\n（只影响这台设备的浏览器，不影响对方）')) return;
+  clearAllHistory(LS);
+  showConversation(state.session && state.session.paired ? state.session.peerId : 0);
+  renderDevices();
+  addLog('info', '已清空全部聊天记录');
+});
 
 el.btnPinCancel.addEventListener('click', () => {
   el.btnPinOk.disabled = false;
