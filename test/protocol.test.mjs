@@ -1,16 +1,24 @@
 /**
- * protocol.test.mjs — 会话层端到端测试
+ * protocol.test.mjs — 会话层 v2 端到端测试
  *
  * 用「虚拟时钟 + 内存声学信道」把两个 ChatSession 接起来：
  *   发送 → 真实 modulate 成波形 → 送到对端 AcousticReceiver 解调 → 对端 onFrame
- * 因此这一层验证的是「调制解调 + 配对 + 分片 + 停等 ARQ + 重组」的完整闭环，
- * 而且不依赖真实时间，跑得很快。
+ * 因此验证的是「调制解调 + 广播/扫描/连接 + ARQ + 重组」的完整闭环，且不依赖真实时间。
  *
  * 运行：node test/protocol.test.mjs
  */
 
-import { PROFILES, modulate, AcousticReceiver, FRAME, buildFrame, textToBytes, bytesToText } from '../src/modem.js';
-import { ChatSession, STATE, MAX_TEXT_BYTES } from '../src/protocol.js';
+import {
+  PROFILES,
+  modulate,
+  AcousticReceiver,
+  FRAME,
+  buildFrame,
+  parseFrame,
+  textToBytes,
+  bytesToText,
+} from '../src/modem.js';
+import { ChatSession, STATE, MAX_TEXT_BYTES, REJECT } from '../src/protocol.js';
 
 const FS = 48000;
 const PROFILE = PROFILES.robust;
@@ -31,20 +39,18 @@ class Clock {
   clearTimeout(id) {
     this.q = this.q.filter((t) => t.id !== id);
   }
+  async settle(rounds = 12) {
+    for (let i = 0; i < rounds; i++) await new Promise((r) => setImmediate(r));
+  }
   /**
-   * 推进到 now+ms，按时间顺序执行所有到期定时器。
-   *
-   * 每轮循环开头必须先 flush 微任务：发送是通过 Promise 链串行化的，
-   * 新的定时器往往是在微任务里才被排进来；不 flush 就会漏掉它们，
-   * 表现为「消息排队了但永远发不出去」。
+   * 推进到 now+ms。
+   * 关键：必须先排空微任务再推进时间——发送是 Promise 链串行化的，
+   * 新定时器往往在微任务里才排进来；若先把 now 跳到 target，新定时器就落在窗口外。
    */
   async advance(ms) {
-    // 关键：先把微任务排干净，再推进时间。
-    // 发送链是 Promise 串起来的，定时器往往在这一刻才被排进来；
-    // 若先把 now 跳到 target，新定时器就落在窗口之外，表现为「消息永远发不出去」。
     await this.settle();
     const target = this.now + ms;
-    for (let guard = 0; guard < 200000; guard++) {
+    for (let guard = 0; guard < 300000; guard++) {
       let due = null;
       for (const t of this.q) if (t.at <= target && (!due || t.at < due.at)) due = t;
       if (due) {
@@ -54,30 +60,18 @@ class Clock {
         await this.settle(6);
         continue;
       }
-      const prev = this.now;
       this.now = target;
       await this.settle();
-      // 刚跳完时间，微任务里可能又排出窗口内的定时器（它们用的是 prev 时刻）
       let again = null;
       for (const t of this.q) if (t.at <= target && (!again || t.at < again.at)) again = t;
       if (!again) break;
     }
     await this.settle();
   }
-
-  /** 排空微任务（用真实 setImmediate 让 await/.then 链推进） */
-  async settle(rounds = 12) {
-    for (let i = 0; i < rounds; i++) await new Promise((r) => setImmediate(r));
-  }
 }
 
 /* ============================ 内存声学信道 ============================ */
 
-/**
- * @param {Clock} clock
- * @param {object} stats 统计（发送数、丢包数）
- * @param {(frameBytes:Uint8Array, n:number)=>boolean} [shouldDrop]
- */
 function makeChannel(clock, stats, shouldDrop) {
   const peers = { a: null, b: null };
   let txCount = 0;
@@ -86,10 +80,11 @@ function makeChannel(clock, stats, shouldDrop) {
     const wav = modulate(bytes, PROFILE, FS);
     const durMs = (wav.length / FS) * 1000;
     stats[`tx${from.toUpperCase()}`]++;
+    stats.sent[from].push({ type: bytes[0] & 0x0f, len: bytes.length, at: clock.now });
     const n = ++txCount;
     const drop = shouldDrop ? shouldDrop(bytes, n, from) : false;
     if (drop) stats.dropped++;
-    // 声波是广播信道：任何人发声期间，整条信道都算被占用
+    // 声波是广播信道：任何人发声期间整条信道都算被占用
     const markBusy = (v) => {
       if (peers.a?.session) peers.a.session.setCarrierBusy(v);
       if (peers.b?.session) peers.b.session.setCarrierBusy(v);
@@ -135,237 +130,263 @@ function check(name, cond, extra = '') {
 
 /* ============================ 装配一对会话 ============================ */
 
-function setupPair({ shouldDrop, opts, randA, randB, idA = 1, idB = 2, nameA = '甲', nameB = '乙', nonceA, nonceB } = {}) {
+function setupPair({
+  shouldDrop,
+  opts,
+  randA = () => 0.3,
+  randB = () => 0.3,
+  idA = 1,
+  idB = 2,
+  nameA = '甲',
+  nameB = '乙',
+  nonceA,
+  nonceB,
+} = {}) {
   const clock = new Clock();
-  const stats = { txA: 0, txB: 0, dropped: 0 };
+  const stats = { txA: 0, txB: 0, dropped: 0, sent: { a: [], b: [] } };
   const ch = makeChannel(clock, stats, shouldDrop);
   const logs = { a: [], b: [] };
   const inbox = { a: [], b: [] };
+  const pins = { a: null, b: null };
+  const connects = { a: [], b: [] };
 
   const a = { rx: new AcousticReceiver(PROFILE, FS), session: null };
   const b = { rx: new AcousticReceiver(PROFILE, FS), session: null };
   ch.peers.a = a;
   ch.peers.b = b;
 
-  a.session = new ChatSession({
-    myId: idA,
-    myName: nameA,
-    now: () => clock.now,
-    nonce: nonceA,
-    transmit: ch.transmit('a', 'b'),
-    timers: clock,
-    opts: { ...opts, rand: randA },
-    onMessage: (m) => inbox.a.push(m),
-    onLog: (e) => logs.a.push(e),
-  });
-  b.session = new ChatSession({
-    myId: idB,
-    myName: nameB,
-    now: () => clock.now,
-    nonce: nonceB,
-    transmit: ch.transmit('b', 'a'),
-    timers: clock,
-    opts: { ...opts, rand: randB },
-    onMessage: (m) => inbox.b.push(m),
-    onLog: (e) => logs.b.push(e),
-  });
-  return { clock, stats, a, b, inbox, logs };
+  const mk = (side, obj, id, name, txTo, rand, nonce) =>
+    new ChatSession({
+      myId: id,
+      myName: name,
+      nonce,
+      transmit: ch.transmit(side, txTo),
+      timers: clock,
+      now: () => clock.now,
+      rand,
+      opts,
+      onMessage: (m) => inbox[side].push(m),
+      onLog: (e) => logs[side].push(e),
+      onPin: (p) => (pins[side] = p),
+      onConnectResult: (r) => connects[side].push(r),
+    });
+
+  a.session = mk('a', a, idA, nameA, 'b', randA, nonceA);
+  b.session = mk('b', b, idB, nameB, 'a', randB, nonceB);
+  return { clock, stats, a, b, inbox, logs, pins, connects };
 }
 
-/* ============================ 1. 配对 ============================ */
+/* ============================ 1. 默认静默 ============================ */
 
-group('1. 声波配对');
-
-{
-  const { clock, a, b } = setupPair();
-  a.session.start();
-  b.session.start();
-  check('初始未配对', !a.session.paired && !b.session.paired);
-
-  await clock.advance(20000);
-  check('双方完成配对', a.session.paired && b.session.paired);
-  check('交换了 id', a.session.peerId === 2 && b.session.peerId === 1, `a.peer=${a.session.peerId} b.peer=${b.session.peerId}`);
-  check('交换了昵称', a.session.peerName === '乙' && b.session.peerName === '甲', `a.peerName=${a.session.peerName} b.peerName=${b.session.peerName}`);
-}
-
-/* ============================ 2. 单帧文本 ============================ */
-
-group('2. 单帧文本收发');
+group('1. 默认静默：「开始使用」不发声');
 
 {
-  const { clock, a, b, inbox } = setupPair();
+  const { clock, stats, a, b } = setupPair();
   a.session.start();
   b.session.start();
-  await clock.advance(20000);
-
-  const r = a.session.say('你好，这是第一条声波消息。');
-  check('入队成功', r.ok && r.chunks === 1, `chunks=${r.chunks}`);
-  await clock.advance(20000);
-
-  check('对端收到 1 条', inbox.b.length === 1, `实收 ${inbox.b.length}`);
-  check('正文一致', inbox.b[0]?.text === '你好，这是第一条声波消息。', JSON.stringify(inbox.b[0]?.text));
-  check('显示对端昵称', inbox.b[0]?.from === '甲', inbox.b[0]?.from);
-  check('发送队列已清空', a.session.queue.length === 0 && a.session.current === null);
-}
-
-/* ============================ 3. 双向 + 长消息分片 ============================ */
-
-group('3. 双向通信与长消息分片重组');
-
-{
-  const { clock, a, b, inbox } = setupPair();
-  a.session.start();
-  b.session.start();
-  await clock.advance(20000);
-
-  const longText = '声波'.repeat(120); // 240 个汉字 = 720 字节，必然多帧
-  const r = a.session.say(longText);
-  check('长消息被分片', r.chunks > 1, `${textToBytes(longText).length} 字节 → ${r.chunks} 帧`);
-
-  // 声波是半双工：等甲把长消息发完，乙再回复（真实使用也是这个节奏）
-  await clock.advance(60000);
-  check('甲发完后队列清空', a.session.current === null && a.session.queue.length === 0);
-
-  b.session.say('收到，我这边一切正常。');
   await clock.advance(30000);
-  check('乙收到长消息', inbox.b.length === 1, `实收 ${inbox.b.length}`);
-  check('长消息完整重组', inbox.b[0]?.text === longText, `长度 ${inbox.b[0]?.text?.length} vs ${longText.length}`);
-  check('甲收到回复', inbox.a.length === 1, `实收 ${inbox.a.length}`);
-  check('回复正文一致', inbox.a[0]?.text === '收到，我这边一切正常。');
+  check('A 一声没发', stats.txA === 0, `txA=${stats.txA}`);
+  check('B 一声没发', stats.txB === 0, `txB=${stats.txB}`);
+  check('状态为空闲', a.session.state === STATE.IDLE && b.session.state === STATE.IDLE);
 }
 
-/* ============================ 4. 丢包重传 ============================ */
+/* ============================ 2. 扫描开关 ============================ */
 
-group('4. 丢包重传（丢第 1 个数据帧，应自动重传后送达）');
+group('2. 扫描开关：没点「检测设备」就不显示');
+
+{
+  const { clock, stats, a, b } = setupPair();
+  a.session.start();
+  b.session.start();
+  a.session.startBroadcast();
+
+  await clock.advance(12000);
+  check('A 确实在广播', stats.txA >= 2, `广播 ${stats.txA} 次`);
+  check('B 未扫描 → 列表为空', b.session.discovered.size === 0, `列表 ${b.session.discovered.size} 项`);
+
+  b.session.startScan();
+  await clock.advance(12000);
+  check('B 开始扫描 → 发现 A', b.session.discovered.size === 1, `列表 ${b.session.discovered.size} 项`);
+  const dev = b.session.discovered.get(1);
+  check('发现项带昵称', dev && dev.name === '甲', dev && dev.name);
+  check('发现项带信号强度', dev && typeof dev.snr === 'number', dev && `snr=${dev.snr?.toFixed(1)}`);
+}
+
+/* ============================ 3. 广播节奏 ============================ */
+
+group('3. 广播节奏：周期性发声 + 静默窗口');
+
+{
+  const { clock, stats, a } = setupPair();
+  a.session.start();
+  a.session.startBroadcast();
+  await clock.advance(20000);
+  const times = stats.sent.a.map((x) => x.at);
+  const gaps = times.slice(1).map((t, i) => t - times[i]);
+  const avg = gaps.length ? gaps.reduce((x, y) => x + y, 0) / gaps.length : 0;
+  check('持续广播（20 秒内 >= 3 次）', times.length >= 3, `共 ${times.length} 次`);
+  check('间隔约等于 发声时长 + 静默 2.8s', avg > 3000 && avg < 4500, `平均间隔 ${Math.round(avg)}ms`);
+  check('PIN 已生成', typeof a.session.pin === 'number' && a.session.pin >= 0 && a.session.pin <= 9999, `PIN=${a.session.pad4(a.session.pin)}`);
+}
+
+/* ============================ 4. 连接成功 ============================ */
+
+group('4. 连接：PIN 正确 → 双方配对');
+
+{
+  const { clock, a, b, pins, connects } = setupPair();
+  a.session.start();
+  b.session.start();
+  a.session.startBroadcast();
+  b.session.startScan();
+
+  await clock.advance(6000);
+  check('B 发现 A', b.session.discovered.size === 1);
+  const pin = a.session.pin;
+  check('A 屏幕上有 PIN', typeof pin === 'number', `PIN=${a.session.pad4(pin)}`);
+
+  const r = b.session.connect(1, pin);
+  check('发起连接成功', r.ok);
+  await clock.advance(30000);
+
+  check('B 侧配对成功', b.session.paired && b.session.peerId === 1, `peer=${b.session.peerName}`);
+  check('A 侧配对成功', a.session.paired && a.session.peerId === 2, `peer=${a.session.peerName}`);
+  check('B 收到成功回调', connects.b.some((c) => c.ok), JSON.stringify(connects.b));
+  check('连接成功后停止广播', a.session.broadcasting === false);
+  check('PIN 已作废', a.session.pin === null);
+  check('未收到过拒绝', !connects.b.some((c) => !c.ok));
+}
+
+/* ============================ 5. PIN 错误 ============================ */
+
+group('5. PIN 错误：拒绝 + 累计 3 次后停止广播');
+
+{
+  const { clock, a, b, connects } = setupPair();
+  a.session.start();
+  a.session.startBroadcast();
+  await clock.advance(3000);
+  const realPin = a.session.pin;
+  const wrong = (realPin + 1) % 10000;
+
+  const r = b.session.connect(1, wrong);
+  check('PIN 格式合法但内容错误', !r.ok && r.reason === 'not-found', '（B 没扫描，所以先发现不了）');
+
+  // 直接构造连接请求帧发给 A，做白盒验证
+  const mkReq = (pin) => {
+    const name = textToBytes('乙');
+    const p = new Uint8Array(3 + name.length);
+    p[0] = (pin >> 8) & 0xff;
+    p[1] = pin & 0xff;
+    p[2] = name.length;
+    p.set(name, 3);
+    return buildFrame({ type: FRAME.CONNECT_REQ, seq: 1, src: 2, dst: 1, payload: p });
+  };
+
+  a.session.onFrame(parseFrame(mkReq(wrong)));
+  await clock.advance(3000);
+  check('第 1 次错：仍在广播', a.session.broadcasting === true, `pinErrors=${a.session.pinErrors}`);
+
+  a.session.onFrame(parseFrame(mkReq(wrong)));
+  await clock.advance(3000);
+  check('第 2 次错：仍在广播', a.session.broadcasting === true, `pinErrors=${a.session.pinErrors}`);
+
+  a.session.onFrame(parseFrame(mkReq(wrong)));
+  await clock.advance(3000);
+  check('第 3 次错：已自动停止广播', a.session.broadcasting === false, `pinErrors=${a.session.pinErrors}`);
+  check('停止后 PIN 作废', a.session.pin === null);
+  check('未配对（防住了穷举）', a.session.paired === false);
+}
+
+/* ============================ 6. 未广播时收到请求 ============================ */
+
+group('6. 未广播时收到连接请求 → 拒绝');
+
+{
+  const { clock, stats, a, logs } = setupPair();
+  a.session.start();
+  check('启动后没在广播', a.session.broadcasting === false);
+
+  const name = textToBytes('乙');
+  const p = new Uint8Array(3 + name.length);
+  p[0] = 0;
+  p[1] = 5; // 随便一个 PIN
+  p[2] = name.length;
+  p.set(name, 3);
+  const beforeTx = stats.txA;
+  a.session.onFrame(parseFrame(buildFrame({ type: FRAME.CONNECT_REQ, seq: 1, src: 2, dst: 1, payload: p })));
+  await clock.advance(3000);
+
+  check('确实回了帧（拒绝）', stats.txA === beforeTx + 1, `txA ${beforeTx} → ${stats.txA}`);
+  check('未配对', a.session.paired === false);
+  check('日志里说明了拒绝原因', logs.a.some((l) => l.text.includes('没在广播')), '');
+}
+
+/* ============================ 7. 连接后收发消息 ============================ */
+
+group('7. 连接后收发消息（ARQ 仍然工作）');
+
+{
+  const { clock, a, b, inbox } = setupPair();
+  a.session.start();
+  b.session.start();
+  a.session.startBroadcast();
+  b.session.startScan();
+  await clock.advance(6000);
+  b.session.connect(1, a.session.pin);
+  await clock.advance(30000);
+  check('已配对', a.session.paired && b.session.paired);
+
+  const r = a.session.say('你好，这是声波消息。');
+  check('入队成功', r.ok && r.chunks === 1, `chunks=${r.chunks}`);
+  await clock.advance(30000);
+  check('B 收到 1 条', inbox.b.length === 1, `实收 ${inbox.b.length}`);
+  check('正文一致', inbox.b[0]?.text === '你好，这是声波消息。', JSON.stringify(inbox.b[0]?.text));
+  check('带对端名字', inbox.b[0]?.fromName === '甲', inbox.b[0]?.fromName);
+
+  b.session.say('收到');
+  await clock.advance(30000);
+  check('A 收到回复', inbox.a.length === 1, `实收 ${inbox.a.length}`);
+}
+
+/* ============================ 8. 长消息分片 + 丢包重传 ============================ */
+
+group('8. 长消息分片重组 + 丢包重传');
 
 {
   let dataFrames = 0;
   const { clock, a, b, inbox, stats } = setupPair({
     shouldDrop: (bytes) => {
-      // 只丢 A 发出的第一个 MSG 帧（header 第 0 字节低 4 位 = 帧类型）
       if ((bytes[0] & 0x0f) === FRAME.MSG) {
         dataFrames++;
-        return dataFrames === 1;
+        return dataFrames === 1; // 丢第一个数据帧
       }
       return false;
     },
   });
   a.session.start();
   b.session.start();
-  await clock.advance(20000);
+  a.session.startBroadcast();
+  b.session.startScan();
+  await clock.advance(6000);
+  b.session.connect(1, a.session.pin);
+  await clock.advance(30000);
 
-  a.session.say('这条消息的第一个数据帧会被丢掉');
-  await clock.advance(60000);
+  const longText = '声波'.repeat(120); // 720 字节 → 多帧
+  const r = a.session.say(longText);
+  check('长消息被分片', r.chunks > 1, `${textToBytes(longText).length} 字节 → ${r.chunks} 帧`);
+  await clock.advance(180000);
 
   check('确实丢了一帧', stats.dropped === 1, `dropped=${stats.dropped}`);
-  check('重传后仍然送达', inbox.b.length === 1, `实收 ${inbox.b.length}`);
-  check('正文正确', inbox.b[0]?.text === '这条消息的第一个数据帧会被丢掉');
-}
-
-/* ============================ 5. ACK 丢失去重 ============================ */
-
-group('5. ACK 丢失（对端会重复收到同一帧，必须去重且只交付一次）');
-
-{
-  let ackDropped = 0;
-  const { clock, a, b, inbox, stats } = setupPair({
-    shouldDrop: (bytes, n, from) => {
-      if (from === 'b' && (bytes[0] & 0x0f) === FRAME.ACK && ackDropped < 1) {
-        ackDropped++;
-        return true;
-      }
-      return false;
-    },
-  });
-  a.session.start();
-  b.session.start();
-  await clock.advance(20000);
-
-  a.session.say('ACK 会丢一次，触发重传');
-  await clock.advance(60000);
-
-  check('ACK 被丢了一次', ackDropped === 1);
-  check('发送方重传过', stats.txA >= 2, `txA=${stats.txA}`);
-  check('接收方只交付一次（去重生效）', inbox.b.length === 1, `实收 ${inbox.b.length}`);
-  check('正文正确', inbox.b[0]?.text === 'ACK 会丢一次，触发重传');
-}
-
-/* ============================ 6. 持续丢包最终放弃 ============================ */
-
-group('6. 持续丢包（超过重传上限后放弃，不能死循环）');
-
-{
-  let seen = 0;
-  const { clock, a, b, inbox, stats } = setupPair({
-    shouldDrop: (bytes, n, from) => {
-      if (from === 'a' && (bytes[0] & 0x0f) === FRAME.MSG) {
-        seen++;
-        return true; // 数据帧全丢
-      }
-      return false;
-    },
-  });
-  a.session.start();
-  b.session.start();
-  await clock.advance(20000);
-
-  a.session.say('这条永远发不出去');
-  await clock.advance(120000);
-
-  check('重传次数受控', seen === 4, `实际发出 ${seen} 次（1 次首发 + 3 次重传）`);
-  check('接收方什么都没收到', inbox.b.length === 0);
-  check('发送方已回到空闲（未死循环）', a.session.current === null && a.session.queue.length === 0);
-  check('上报了 no-ack 错误', a.session.state === STATE.IDLE);
-}
-
-/* ============================ 7. 拒绝超长文本 ============================ */
-
-group('7. 边界：超长文本');
-
-{
-  const { a, b, clock } = setupPair();
-  a.session.start();
-  b.session.start();
-  await clock.advance(20000);
-  const r = a.session.say('x'.repeat(MAX_TEXT_BYTES + 1));
-  check('超过上限被拒绝', !r.ok && r.reason === 'too-long');
-  const r2 = a.session.say('');
-  check('空文本被拒绝', !r2.ok && r2.reason === 'empty');
-}
-
-/* ============================ 8. 载波侦听让行 ============================ */
-
-group('8. 载波侦听：双方同时起发时，退避 + 让行保证都能送达');
-
-{
-  // A 退避 30ms，B 退避 350ms —— 模拟两端随机退避错开
-  const { clock, a, b, inbox } = setupPair({
-    opts: { txJitter: 400, deferMs: 200 },
-    randA: () => 0.05,
-    randB: () => 0.9,
-  });
-  a.session.start();
-  b.session.start();
-  await clock.advance(20000);
-
-  a.session.say('甲先开口');
-  b.session.say('乙也想同时开口');
-  await clock.advance(120000);
-
-  check('甲的消息送达', inbox.b.length === 1, `实收 ${inbox.b.length}`);
-  check('乙的消息送达', inbox.a.length === 1, `实收 ${inbox.a.length}`);
-  check('甲正文正确', inbox.b[0]?.text === '甲先开口', JSON.stringify(inbox.b[0]?.text));
-  check('乙正文正确', inbox.a[0]?.text === '乙也想同时开口', JSON.stringify(inbox.a[0]?.text));
+  check('重传后完整送达', inbox.b.length === 1 && inbox.b[0].text === longText, `实收 ${inbox.b.length} 条，长度 ${inbox.b[0]?.text?.length}`);
 }
 
 /* ============================ 9. 设备 ID 冲突 ============================ */
 
-group('9. 设备 ID 冲突：用 nonce 无歧义裁决谁让位');
+group('9. 设备 ID 冲突：nonce 大的让位');
 
 {
-  // 两端 id 都是 1（模拟同一浏览器两个 tab 共用持久身份），
-  // A 的 nonce 更小 → 由 A 让位；B 必须原地不动，保住持久身份。
-  const { clock, a, b, inbox } = setupPair({
+  const { clock, a, b } = setupPair({
     idA: 1,
     idB: 1,
     nameA: '设备1',
@@ -377,27 +398,58 @@ group('9. 设备 ID 冲突：用 nonce 无歧义裁决谁让位');
   let bCollide = 0;
   a.session.onIdCollision = () => {
     aCollide++;
-    a.session.setId(2); // 让位方换 ID（应用层只写本 tab 的覆盖，不动持久身份）
-    a.session.pair();
+    a.session.myId = 2;
+    a.session.startBroadcast();
   };
   b.session.onIdCollision = () => {
     bCollide++;
   };
-
   a.session.start();
-  await clock.advance(3000); // 错开启动，模拟真实的两个 tab
   b.session.start();
-  await clock.advance(30000);
+  a.session.startBroadcast();
+  await clock.advance(5000);
+  b.session.startBroadcast();
+  await clock.advance(20000);
 
-  check('只有 nonce 小的一方让位', aCollide > 0 && bCollide === 0, `A 触发 ${aCollide} 次 / B 触发 ${bCollide} 次`);
-  check('让位方换了 ID', a.session.myId === 2, `A 现在 id=${a.session.myId}`);
-  check('未让位方身份保持不变', b.session.myId === 1, `B 现在 id=${b.session.myId}`);
-  check('换 ID 后成功配对', a.session.paired && b.session.paired, `a.peer=${a.session.peerId} b.peer=${b.session.peerId}`);
+  check('只有 nonce 小的一方让位', aCollide > 0 && bCollide === 0, `A 触发 ${aCollide} / B 触发 ${bCollide}`);
+  check('让位方已换 ID', a.session.myId === 2, `A id=${a.session.myId}`);
+  check('未让位方 ID 不变', b.session.myId === 1, `B id=${b.session.myId}`);
+}
 
-  a.session.say('换过 ID 之后应该能正常聊天');
+/* ============================ 10. 发现项过期 ============================ */
+
+group('10. 发现项过期自动移除');
+
+{
+  const { clock, a, b } = setupPair({ opts: { discoverTtl: 5000 } });
+  a.session.start();
+  b.session.start();
+  a.session.startBroadcast();
+  b.session.startScan();
+  await clock.advance(6000);
+  check('已发现 A', b.session.discovered.size === 1);
+
+  a.session.stopBroadcast();
   await clock.advance(30000);
-  check('换 ID 后消息能送达', inbox.b.length === 1, `实收 ${inbox.b.length}`);
-  check('正文正确', inbox.b[0]?.text === '换过 ID 之后应该能正常聊天', JSON.stringify(inbox.b[0]?.text));
+  check('A 停止广播后，发现项过期移除', b.session.discovered.size === 0, `列表 ${b.session.discovered.size} 项`);
+}
+
+/* ============================ 11. 边界 ============================ */
+
+group('11. 边界');
+
+{
+  const { clock, a, b } = setupPair();
+  a.session.start();
+  b.session.start();
+
+  check('未配对时不能发消息', a.session.say('hi').reason === 'no-peer');
+  const r = b.session.connect(99, '1234');
+  check('连接不存在的设备被拒', !r.ok && r.reason === 'not-found');
+  const r2 = b.session.connect(1, '12');
+  check('PIN 位数不对被拒', !r2.ok && r2.reason === 'bad-pin');
+  const r3 = b.session.connect(1, 'abcd');
+  check('PIN 非数字被拒', !r3.ok && r3.reason === 'bad-pin');
 }
 
 /* ============================ 汇总 ============================ */

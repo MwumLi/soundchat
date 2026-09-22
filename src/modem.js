@@ -16,15 +16,23 @@
 
 /* ============================ 常量 ============================ */
 
-/** 帧类型 */
+/**
+ * 帧类型（v2，见 docs/design.md）
+ * 物理层只负责按 type 的 4 个 bit 编解码，具体语义由会话层定义。
+ */
 export const FRAME = {
-  HELLO: 0x1, // 广播打招呼，payload = 昵称
-  HELLO_ACK: 0x2, // 回应打招呼
-  MSG: 0x3, // 聊天正文
-  ACK: 0x4, // 确认，payload = 被确认的 seq
-  NACK: 0x5, // 否认，要求重传
-  BYE: 0x6, // 告别
+  BEACON: 0x1, // A→广播：宣告存在（nonce + 昵称），不含 PIN
+  CONNECT_REQ: 0x2, // B→A：请求连接（PIN + 昵称）
+  CONNECT_ACK: 0x3, // A→B：同意连接
+  REJECT: 0x4, // A→B：拒绝（原因码）
+  MSG: 0x5, // 双向：聊天正文
+  ACK: 0x6, // 双向：停等确认
+  BYE: 0x7, // 双向：主动断开
 };
+
+/** 帧类型的合法范围（帧头校验用） */
+export const FRAME_TYPE_MIN = 1;
+export const FRAME_TYPE_MAX = 7;
 
 export const VERSION = 1;
 export const HEADER_BYTES = 6; // ver|type, seq, src, dst, len, crc8(header)
@@ -564,8 +572,8 @@ export class AcousticReceiver {
     if (
       hdr[5] !== crc8(hdr.subarray(0, 5)) ||
       hdr[0] >> 4 !== VERSION ||
-      (hdr[0] & 0x0f) < 1 ||
-      (hdr[0] & 0x0f) > 6 ||
+      (hdr[0] & 0x0f) < FRAME_TYPE_MIN ||
+      (hdr[0] & 0x0f) > FRAME_TYPE_MAX ||
       len > MAX_PAYLOAD
     ) {
       return this._failCandidate(pd.colAbsValue);
