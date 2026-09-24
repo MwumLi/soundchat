@@ -83,7 +83,7 @@ node tools/serve.mjs
 | `https://...` | ✅ | ✅ |
 | `http://localhost:8080` | ✅ | ✅ |
 | `file:///.../soundchat.html` | ✅ | ✅ |
-| `http://10.91.145.249:8080` | ❌ | ❌ `navigator.mediaDevices` 直接是 `undefined` |
+| `http://192.168.1.100:8080` | ❌ | ❌ `navigator.mediaDevices` 直接是 `undefined` |
 
 按 [MDN 的定义](https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Secure_Contexts)，
 只有 `https` / `wss` / `file` 协议，以及主机名是 `localhost` 或 `127.0.0.0/8`、`::1/128` 的才算安全上下文。
@@ -94,12 +94,12 @@ node tools/serve.mjs
 ```
 file:///.../soundchat.html          → isSecureContext: true,  mediaDevices: ✅
 http://localhost:8099/...           → isSecureContext: true,  mediaDevices: ✅
-http://10.91.145.249:8099/...       → 该机器上连自己的局域网 IP 都访问不通（见下）
+http://192.168.1.100:8099/...       → 该机器上连自己的局域网 IP 都访问不通（见下）
 ```
 
-> 附加发现：这台 Mac 上 `curl --noproxy '*' http://10.91.145.249:8099/` 返回 `000`（而 localhost 返回 `200`），
-> Chrome 同样打不开。可能是无线网络的客户端隔离或企业管控。
-> 也就是说，即便绕过权限问题，局域网互访在这台机器所在的网络上也未必通。
+> 另外实测发现：某些网络环境下（无线客户端隔离、AP 隔离）连本机的局域网 IP 都访问不通
+> ——`curl --noproxy '*' http://<自己的局域网IP>:8099/` 返回 `000`，而 `localhost` 返回 `200`。
+> 也就是说，即便绕过权限问题，局域网互访也未必通。
 
 **所以正确做法是：不要用服务。** 见方式三，两台设备各自本地打开同一个单文件即可。
 
@@ -108,7 +108,7 @@ http://10.91.145.249:8099/...       → 该机器上连自己的局域网 IP 都
 1. 给服务器配 HTTPS 证书。iOS 需要在设置里手动信任证书；Android Chrome 对"证书有错误"的页面仍视为非安全上下文。
 2. 桌面 Chrome 加启动参数把局域网 IP 临时当作安全源（**仅限桌面，手机不行**）：
    ```bash
-   open -a "Google Chrome" --args --unsafely-treat-insecure-origin-as-secure=http://10.91.145.249:8080
+   open -a "Google Chrome" --args --unsafely-treat-insecure-origin-as-secure=http://192.168.1.100:8080
    ```
 3. 内网 DNS 指一个域名到那台机器 + 配真证书（企业内网常见做法）。
 
