@@ -1,9 +1,12 @@
 # 声波聊天 · SoundChat
 
+**中文** | [English](README.en.md)
+
 > 两台设备用**扬声器 → 麦克风**直接互传文字。不需要局域网、不需要蓝牙、不需要联网。
 >
 > Text chat over sound waves — speaker to microphone. No Wi-Fi, no Bluetooth, no internet.
 
+[![CI](https://github.com/MwumLi/soundchat/actions/workflows/ci.yml/badge.svg)](https://github.com/MwumLi/soundchat/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ```
@@ -28,7 +31,20 @@
 
 ## 快速开始
 
-### 方式零：同一台机器双开（最快的自测方式，不需要第二台设备）
+### 最省事：直接用在线版
+
+两台设备都打开：
+
+```
+https://mwumli.github.io/soundchat/
+```
+
+GitHub Pages 是 **https**，所以浏览器会给麦克风权限；不用传文件、不用装东西、不用跑服务器。
+打开后按下面的「[怎么用](#怎么用)」操作即可。
+
+> 想要完全离线（无网络环境），见下面「方式三：离线单文件」。
+
+### 方式零：同一台机器双开（不需要第二台设备）
 
 同一台 PC 上开两个浏览器窗口，或同一浏览器的两个 tab，就能自己跟自己聊。
 
@@ -98,7 +114,7 @@ node tools/serve.mjs
 ```
 file:///.../soundchat.html          → isSecureContext: true,  mediaDevices: ✅
 http://localhost:8099/...           → isSecureContext: true,  mediaDevices: ✅
-http://192.168.1.100:8099/...       → 该机器上连自己的局域网 IP 都访问不通（见下）
+http://192.168.1.100:8099/...       → 某些网络下连本机的局域网 IP 都访问不通（见下）
 ```
 
 > 另外实测发现：某些网络环境下（无线客户端隔离、AP 隔离）连本机的局域网 IP 都访问不通
@@ -114,9 +130,9 @@ http://192.168.1.100:8099/...       → 该机器上连自己的局域网 IP 都
    ```bash
    open -a "Google Chrome" --args --unsafely-treat-insecure-origin-as-secure=http://192.168.1.100:8080
    ```
-3. 内网 DNS 指一个域名到那台机器 + 配真证书（企业内网常见做法）。
+3. 配一个域名指向那台机器，并申请一张真证书。
 
-### 方式三：电脑 + 手机（推荐用法）
+### 方式三：离线单文件（手机 / 无网络环境）
 
 手机没法直接跑 Node，所以用**单文件产物**：
 
@@ -128,7 +144,7 @@ node build.mjs        # 生成 dist/soundchat.html（约 60 KB，零依赖、全
 
 - **Android**：Chrome 把 `file://` 当安全上下文（本机实测 `isSecureContext: true`、`mediaDevices` 可用），
   用文件管理器打开这个 HTML 即可
-- **iOS**：Safari 在 `file://` 下**不给麦克风权限**。需要把这个 HTML 放到任意 `https://` 静态托管上（GitHub Pages、内网 nginx 都行），用 Safari 打开后「添加到主屏幕」，之后就能离线用了
+- **iOS**：Safari 在 `file://` 下**不给麦克风权限**。需要把这个 HTML 放到任意 `https://` 静态托管上（GitHub Pages、任意静态托管都行），用 Safari 打开后「添加到主屏幕」，之后就能离线用了
 
 > 这一步是唯一的"引导"环节——需要把文件本身送到手机上。
 > 一旦页面加载完成，之后传文字就完全靠声波，不再需要任何网络。
@@ -144,8 +160,8 @@ node build.mjs        # 生成 dist/soundchat.html（约 60 KB，零依赖、全
 
 两点提醒：
 
-- 记录是**明文**存在浏览器本地存储里的。如果设备是公司配发的或装了管控软件，
-  浏览器数据可能在审计范围内——传敏感内容前先想清楚。
+- 记录是**明文**存在浏览器本地存储里的，同一台设备上的其他人或程序都可能读到——
+  传敏感内容前先想清楚。
 - 记录**只在本机**，不会同步给对方、也不上传。
 
 **已知代价**：会话记录以对方的设备 ID 为主键。对方一旦**重置浏览器数据、换浏览器或用无痕模式**，

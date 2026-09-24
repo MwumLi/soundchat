@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 测试（Node ${{ matrix.node }}）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 项目零依赖，不需要 npm install
+      - name: 跑全部测试
+        run: npm test
+
+      - name: 构建单文件产物
+        run: node build.mjs
+
+      - name: 上传单文件产物
+        if: matrix.node == '20'
+        uses: actions/upload-artifact@v4
+        with:
+          name: soundchat-html
+          path: dist/soundchat.html
+          if-no-files-found: error
