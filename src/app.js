@@ -48,7 +48,8 @@ const el = {
   rateText: $('rateText'),
   verText: $('verText'),
   verDetail: $('verDetail'),
-  meterFill: $('meterFill'),
+  waveMini: $('waveMini'),
+  waveBig: $('waveBig'),
   bcastBar: $('bcastBar'),
   pinText: $('pinText'),
   btnStopBcast: $('btnStopBcast'),
@@ -64,6 +65,10 @@ const el = {
   discoverList: $('discoverList'),
   peerList: $('peerList'),
   btnClearAll: $('btnClearAll'),
+  micPanel: $('micPanel'),
+  micLevel: $('micLevel'),
+  btnMicTest: $('btnMicTest'),
+  btnCloseMic: $('btnCloseMic'),
   pinModal: $('pinModal'),
   pinTitle: $('pinTitle'),
   pinInput: $('pinInput'),
@@ -362,12 +367,14 @@ function renderDevices() {
  */
 function openDevices() {
   renderDevices();
+  el.micPanel.classList.remove('open');
   el.devicePanel.classList.add('open');
   el.chat.classList.add('hidden');
   el.btnDevices.classList.add('on');
 }
 function closeDevices() {
   el.devicePanel.classList.remove('open');
+  el.micPanel.classList.remove('open');
   el.chat.classList.remove('hidden');
   el.btnDevices.classList.remove('on');
 }
@@ -487,21 +494,21 @@ async function startAudio() {
 }
 
 function onAudio(e) {
-  if (state.txActive || !state.rx || !state.session) return;
+  if (state.txActive) return; // 自己发声期间丢弃（否则会解到自己的声音）
   const input = e.inputBuffer.getChannelData(0);
   const chunk = new Float32Array(input.length);
   chunk.set(input);
+
+  // 波形显示放在 session 就绪判断之前：麦克风测试即使还没建立会话也要能看
+  pushWave(chunk);
+
+  if (!state.rx || !state.session) return;
   const frames = state.rx.push(chunk);
   for (const f of frames) state.session.onFrame(f);
 
   state.session.setCarrierBusy(normLevel() > CARRIER_THRESHOLD);
 
-  // 电平表用 dB 刻度：线性刻度下"能解出来但很弱"的信号只显示 0.1%，看起来像没收到。
   const raw = normLevel();
-  const db = 10 * Math.log10(Math.max(1e-9, raw));
-  const lv = Math.min(1, Math.max(0, (db + 60) / 60)); // -60dB → 0%，0dB → 100%
-  el.meterFill.style.width = `${(lv * 100).toFixed(0)}%`;
-  el.meterFill.style.background = raw >= DECODE_LEVEL ? 'var(--ok)' : 'var(--line)';
   if (raw > 0.95 && Date.now() - state.lastClipWarn > 8000) {
     state.lastClipWarn = Date.now();
     addLog('warn', '输入电平接近满幅，可能削波失真；同机双开时请把音量调小一些');
@@ -542,6 +549,77 @@ function transmit(bytes) {
     };
     node.start();
   });
+}
+
+/* ============================ 实时波形 ============================ */
+
+const WAVE_SIZE = 2048;
+const waveBuf = new Float32Array(WAVE_SIZE);
+let wavePos = 0;
+let waveDirty = false;
+// 显示增益。刻意用固定值而不是自动增益：用户要的是「声音大 → 波纹高」，
+// 自动增益会把这个信息抹掉。3 倍能让正常说话的音量填满大半个画布。
+const WAVE_GAIN = 3;
+
+function pushWave(samples) {
+  for (let i = 0; i < samples.length; i++) {
+    waveBuf[wavePos] = samples[i];
+    wavePos = (wavePos + 1) % WAVE_SIZE;
+  }
+  waveDirty = true;
+}
+
+function drawWave(canvas, count) {
+  if (!canvas || typeof canvas.getContext !== 'function') return;
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 80;
+  const cssH = canvas.clientHeight || 22;
+  const w = Math.max(1, Math.round(cssW * dpr));
+  const h = Math.max(1, Math.round(cssH * dpr));
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  const g = canvas.getContext('2d');
+  if (!g) return;
+  g.clearRect(0, 0, w, h);
+
+  // 中线：便于判断「有没有信号」而不是只看到一条直线
+  g.strokeStyle = 'rgba(154,163,178,0.22)';
+  g.lineWidth = 1;
+  g.beginPath();
+  g.moveTo(0, h / 2);
+  g.lineTo(w, h / 2);
+  g.stroke();
+
+  const raw = normLevel();
+  g.strokeStyle = raw >= DECODE_LEVEL ? '#3ecf8e' : '#5b6472'; // 绿色 = 强度够解码
+  g.lineWidth = Math.max(1, dpr);
+  g.beginPath();
+  const n = Math.min(count, WAVE_SIZE);
+  const start = (wavePos - n + WAVE_SIZE) % WAVE_SIZE;
+  const half = h / 2 - dpr;
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(-1, Math.min(1, waveBuf[(start + i) % WAVE_SIZE] * WAVE_GAIN));
+    const x = (i / (n - 1)) * w;
+    const y = h / 2 - v * half;
+    if (i === 0) g.moveTo(x, y);
+    else g.lineTo(x, y);
+  }
+  g.stroke();
+}
+
+function waveLoop() {
+  if (waveDirty) {
+    waveDirty = false;
+    drawWave(el.waveMini, 512);
+    if (el.micPanel.classList.contains('open')) {
+      drawWave(el.waveBig, WAVE_SIZE);
+      const raw = normLevel();
+      el.micLevel.textContent = raw < 1e-7 ? '-∞ dB' : `${(10 * Math.log10(raw)).toFixed(0)} dB`;
+    }
+  }
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(waveLoop);
 }
 
 /* ============================ 状态显示 ============================ */
@@ -681,6 +759,7 @@ async function boot() {
   });
 
   state.session.start();
+  waveLoop();
   el.overlay.classList.add('hidden'); // 注意是 .hidden；v2 重写时误写成 .hide（无对应 CSS 规则），遮罩永远盖着
   showConversation(0);
   addLog('info', '已进入静默监听状态，不会自动发声。');
@@ -810,6 +889,19 @@ el.btnStopBcast.addEventListener('click', () => state.session && state.session.s
 el.btnLog.addEventListener('click', () => el.logPanel.classList.toggle('show'));
 el.btnSelfTest.addEventListener('click', selfTest);
 el.btnWav.addEventListener('click', exportWav);
+
+el.btnMicTest.addEventListener('click', () => {
+  el.micPanel.classList.add('open');
+  el.chat.classList.add('hidden');
+  el.devicePanel.classList.remove('open');
+  el.btnDevices.classList.remove('on');
+  waveDirty = true;
+});
+
+el.btnCloseMic.addEventListener('click', () => {
+  el.micPanel.classList.remove('open');
+  openDevices(); // 返回设备面板
+});
 
 el.btnClearAll.addEventListener('click', () => {
   if (!confirm('清空本机保存的全部聊天记录？\n（只影响这台设备的浏览器，不影响对方）')) return;
