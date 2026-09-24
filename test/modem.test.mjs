@@ -293,7 +293,70 @@ for (const key of ['robust', 'fast']) {
   }
 }
 
-/* ============================ 7. 性能指标 ============================ */
+/* ============================ 7. 弱信号（低幅度） ============================ */
+
+group('7. 弱信号：接收幅度很低时仍要能解出来');
+
+// 这一组是补测出来的漏洞：之前所有测试都用 modulate() 的满幅输出（峰值 0.85），
+// 于是"能量门限写死 3000"这个 bug 一直没被发现 ——
+// 实测那个门限要求稳健档幅度 > 0.15、快速档 > 0.25，
+// 而手机隔一两米收到的信号经常比这弱得多。
+{
+  const send = (profile, amp, seed, noiseAmp = 0) => {
+    const payload = textToBytes('弱信号测试');
+    const fb = buildFrame({ type: FRAME.MSG, seq: 1, src: 1, dst: 2, payload });
+    const wav = modulate(fb, profile, 48000);
+    const rng = mulberry32(seed);
+    const out = new Float32Array(wav.length);
+    for (let i = 0; i < wav.length; i++) {
+      let v = wav[i] * amp;
+      if (noiseAmp > 0) {
+        const u1 = Math.max(1e-12, rng());
+        v += Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * rng()) * noiseAmp;
+      }
+      out[i] = v;
+    }
+    const rx = new AcousticReceiver(profile, 48000);
+    const got = [];
+    for (let i = 0; i < out.length; i += 960) {
+      for (const f of rx.push(out.subarray(i, Math.min(i + 960, out.length)))) got.push(f);
+    }
+    for (const f of rx.flush()) got.push(f);
+    return got.length === 1 && bytesToText(got[0].payload) === '弱信号测试';
+  };
+
+  for (const key of ['robust', 'fast']) {
+    const p2 = PROFILES[key];
+    for (const amp of [0.1, 0.05, 0.03]) {
+      check(
+        `${p2.label}档 幅度 ${amp}（电平表约 ${((amp * amp * 100) / 0.7).toFixed(1)}%）`,
+        send(p2, amp, 4000 + amp * 1000),
+        ''
+      );
+    }
+  }
+
+  // 反向：纯噪声不能解出任何帧（门限放宽后最容易出问题的地方）
+  let falsePositives = 0;
+  for (let i = 0; i < 6; i++) {
+    const p2 = PROFILES.robust;
+    const n = 48000 * 3;
+    const rng = mulberry32(7000 + i);
+    const nz = new Float32Array(n);
+    for (let k = 0; k < n; k++) {
+      const u1 = Math.max(1e-12, rng());
+      nz[k] = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * rng()) * 0.08; // 比弱信号还大
+    }
+    const rx = new AcousticReceiver(p2, 48000);
+    for (let k = 0; k < n; k += 960) {
+      for (const f of rx.push(nz.subarray(k, Math.min(k + 960, n)))) falsePositives++;
+    }
+    for (const f of rx.flush()) falsePositives++;
+  }
+  check('纯噪声（幅度 0.08）零误报', falsePositives === 0, `误报 ${falsePositives} 帧`);
+}
+
+/* ============================ 8. 性能指标 ============================ */
 
 group('6. 性能指标');
 

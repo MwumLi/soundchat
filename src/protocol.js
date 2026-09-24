@@ -133,6 +133,7 @@ export class ChatSession {
     this.connecting = null;
     this.carrierBusy = false;
     this.beaconCount = 0;
+    this._lastDeferLog = 0;
 
     /* ---- 定时器 ---- */
     this.beaconTimer = null;
@@ -187,6 +188,7 @@ export class ChatSession {
     this.pinErrors = 0;
     this.broadcasting = true;
     this.beaconCount = 0;
+    this._lastDeferLog = 0;
     this.onPin(this.pin);
     this._log('info', `开始广播，PIN=${this.pad4(this.pin)}（只显示在本机屏幕上，不会进入声波）`);
     this._emitStatus();
@@ -213,6 +215,13 @@ export class ChatSession {
     if (!this.broadcasting || this.beaconTimer) return;
     // 信道忙（对端在发 / 自己在发）先让一让，避免叠音
     if (this.carrierBusy || this.current || this.state === STATE.TX) {
+      // 让行要记日志，否则"点了广播却一声不响"完全查不出原因。
+      // 限流：最多每 5 秒记一次，避免刷屏。
+      const now = this._now();
+      if (now - (this._lastDeferLog || 0) > 5000) {
+        this._lastDeferLog = now;
+        this._log('info', `信道忙（侦听到对端在发声），广播让行中…`);
+      }
       this.beaconTimer = this.timers.setTimeout(() => {
         this.beaconTimer = null;
         this._beaconLoop();

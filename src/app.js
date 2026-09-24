@@ -77,7 +77,12 @@ const el = {
 
 /* ============================ 配置 ============================ */
 
-const CARRIER_THRESHOLD = 0.05; // 归一化能量：满幅正弦 ≈ 0.72
+// 载波侦听门限。归一化能量 ≈ 幅度²（满幅正弦 ≈ 0.72）。
+// 原来 0.05（幅度 0.22）比解码门限还高得多，会出现"能解出对端却听不到它在发"的不一致，
+// 现在对齐到接近解码下限。
+const CARRIER_THRESHOLD = 0.02;
+/** 电平表刻度：低于这个电平基本解不出来，用颜色区分「有信号」和「纯噪声」 */
+const DECODE_LEVEL = 0.0009;
 const MIC_GAIN = 1.0;
 
 const state = {
@@ -460,10 +465,12 @@ function onAudio(e) {
 
   state.session.setCarrierBusy(normLevel() > CARRIER_THRESHOLD);
 
+  // 电平表用 dB 刻度：线性刻度下"能解出来但很弱"的信号只显示 0.1%，看起来像没收到。
   const raw = normLevel();
-  const lv = Math.min(1, raw / 0.7);
+  const db = 10 * Math.log10(Math.max(1e-9, raw));
+  const lv = Math.min(1, Math.max(0, (db + 60) / 60)); // -60dB → 0%，0dB → 100%
   el.meterFill.style.width = `${(lv * 100).toFixed(0)}%`;
-  el.meterFill.style.background = lv > 0.5 ? 'var(--accent)' : 'var(--ok)';
+  el.meterFill.style.background = raw >= DECODE_LEVEL ? 'var(--ok)' : 'var(--line)';
   if (raw > 0.95 && Date.now() - state.lastClipWarn > 8000) {
     state.lastClipWarn = Date.now();
     addLog('warn', '输入电平接近满幅，可能削波失真；同机双开时请把音量调小一些');

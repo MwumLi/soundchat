@@ -241,7 +241,8 @@ export class AcousticReceiver {
    * @param {number} rxFs 接收端采样率
    * @param {object} [opts]
    * @param {number} [opts.threshold=0.42] 前导码归一化匹配分阈值
-   * @param {number} [opts.energyGate=3000] 前导码单符号期望音能量下限（噪声门限）
+   * @param {number} [opts.minAmplitude=0.02] 期望能解出的最低信号幅度，据此推导能量门限
+   * @param {number} [opts.energyGate] 直接指定能量门限（覆盖 minAmplitude）
    * @param {number} [opts.historySeconds=20] 环形缓冲保留时长
    */
   constructor(profile, rxFs, opts = {}) {
@@ -252,7 +253,13 @@ export class AcousticReceiver {
     this.winLen = Math.round(this.nominalSps);
     this.threshold = opts.threshold ?? 0.42;
     this.timingGain = opts.timingGain ?? 0.05; // 每符号最大定时修正（占符号比例）
-    this.energyGate = opts.energyGate ?? 3000;
+    // 能量门限按「最低可解幅度」推导，不要写死。
+    // 写死 3000 时实测：稳健档要求幅度 > 0.15、快速档 > 0.25，
+    // 而电平表在那个强度只显示 3%，用户看到的是"完全没收到信号"。
+    // 改成按 minAmplitude 推导后灵敏度提升 5~8 倍，纯噪声下仍然零误报
+    // （前导码匹配分阈值 0.42 已经足够挡住噪声）。
+    this.minAmplitude = opts.minAmplitude ?? 0.02;
+    this.energyGate = opts.energyGate ?? Math.round(((this.minAmplitude * this.winLen) / 2) ** 2);
     this.historySeconds = opts.historySeconds ?? 20;
 
     this.cap = Math.ceil(rxFs * this.historySeconds);
