@@ -33,7 +33,11 @@ jobs:
           node build.mjs
           cp dist/soundchat.html dist/index.html
 
+      # enablement: true —— 仓库还没在 Settings → Pages 里启用时，让它自动启用。
+      # 不加这个参数，首次部署会直接报 "Get Pages site failed"。
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
