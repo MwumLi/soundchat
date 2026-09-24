@@ -1,6 +1,6 @@
 {
   "name": "soundchat",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "声波传文字：扬声器 → 麦克风，不需要局域网 / 蓝牙 / 联网。自研 MFSK 物理层 + 停等 ARQ + 浏览器界面。",

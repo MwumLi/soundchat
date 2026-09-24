@@ -55,9 +55,26 @@ async function main() {
     parts.push(stripModule(await readFile(join(ROOT, f), 'utf8'), f));
   }
 
+  // 构建标识 = 版本号 + **内容哈希**。
+  //
+  // 为什么不用 git commit 或构建时间：
+  //   - 构建时间会让每次构建产物都不同 → 跑一次测试 git 就变脏
+  //   - git commit 会带 -dirty 状态，导致「提交的产物」和「CI 从干净检出重建的产物」
+  //     标识不一致，正好把要排查的问题引入进来
+  // 内容哈希只取决于源码：同一份源码永远得到同一个标识（可复现），
+  // 而代码一改标识就变 —— 正好用来判断两台设备是不是同一个构建。
+  const { createHash } = await import('node:crypto');
+  const pkg = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
+  const stamp = createHash('sha256')
+    .update(html + '\n' + parts.join('\n'))
+    .digest('hex')
+    .slice(0, 7);
+  const buildInfo = { version: pkg.version || '0.0.0', stamp };
+
   const bundle = [
     '(function () {',
     "'use strict';",
+    `window.__BUILD__ = ${JSON.stringify(buildInfo)};`,
     parts.join('\n'),
     '})();',
   ].join('\n');
@@ -78,6 +95,7 @@ async function main() {
 
   const kb = (Buffer.byteLength(out, 'utf8') / 1024).toFixed(1);
   console.log(`已生成 dist/soundchat.html（${kb} KB，内联 ${SRC.length} 个模块）`);
+  console.log(`构建标识：v${buildInfo.version} · ${buildInfo.stamp}`);
   console.log('这个文件可以直接用浏览器打开（file:// 也能跑，但手机上的麦克风权限见 README）。');
 }
 

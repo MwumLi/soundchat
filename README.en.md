@@ -183,6 +183,10 @@ Two workflows are configured:
 
 Live: **https://mwumli.github.io/soundchat/**
 
+The page shows a **build stamp** (status bar and device panel), e.g. `v0.2.0 · e86574a`.
+**Both devices must show the same stamp** — if they differ, one is serving a cached older
+build; force-reload it (`Cmd+Shift+R` on macOS).
+
 > ⚠️ Pages must be enabled **once**, manually:
 > **Settings → Pages → Build and deployment → Source** → **GitHub Actions**.
 > Otherwise the deploy step fails with `Get Pages site failed ... 404`.

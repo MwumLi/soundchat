@@ -33,6 +33,14 @@ console.log('\n\x1b[1m── 单文件构建产物冒烟\x1b[0m');
 
 /* ---------- 1. 构建 ---------- */
 
+// 先读提交里的产物，构建之后对比 —— 用来抓「改了 src 但忘了重新构建 dist」
+let committedDist = null;
+try {
+  committedDist = readFileSync(join(ROOT, 'dist/soundchat.html'), 'utf8');
+} catch {
+  /* 首次构建前可能不存在 */
+}
+
 let buildOut = '';
 try {
   buildOut = execFileSync(process.execPath, [join(ROOT, 'build.mjs')], { cwd: ROOT, encoding: 'utf8' });
@@ -43,8 +51,34 @@ try {
 }
 
 const dist = readFileSync(join(ROOT, 'dist/soundchat.html'), 'utf8');
+
+{
+  const same = committedDist === null || committedDist === dist;
+  check(
+    '提交的 dist 与重新构建完全一致（没忘记重新构建）',
+    same,
+    same ? '' : '不一致 → 改了 src 之后要跑一次 node build.mjs 并一起提交'
+  );
+}
 const m = dist.match(/<script>([\s\S]*?)<\/script>/);
 check('产物里有内联 script', !!m);
+
+// 构建标识：两台设备靠它判断是不是同一个构建
+const stampMatch = dist.match(/window\.__BUILD__ = (\{[^}]*\});/);
+check('产物里有构建标识 __BUILD__', !!stampMatch, stampMatch ? stampMatch[1] : '');
+if (stampMatch) {
+  const bi = JSON.parse(stampMatch[1]);
+  check('构建标识含版本号', typeof bi.version === 'string' && bi.version !== 'dev', `v${bi.version}`);
+  check('构建标识含内容哈希', /^[0-9a-f]{7}$/.test(bi.stamp || ''), bi.stamp);
+}
+
+// 可复现性：同一份源码构建两次，产物必须逐字节相同
+{
+  const before = readFileSync(join(ROOT, 'dist/soundchat.html'), 'utf8');
+  execFileSync(process.execPath, [join(ROOT, 'build.mjs')], { cwd: ROOT, encoding: 'utf8' });
+  const after = readFileSync(join(ROOT, 'dist/soundchat.html'), 'utf8');
+  check('构建可复现（两次产物逐字节相同）', before === after);
+}
 const code = m ? m[1] : '';
 
 /* ---------- 2. 不能残留 ESM 语法 ---------- */
@@ -116,6 +150,7 @@ check(`app.js 引用的 ${usedIds.length} 个 DOM id 都存在`, missing.length 
 /* ---------- 4. 用最小 DOM 桩跑一遍 bundle ---------- */
 
 const requestedIds = [];
+const elCache = new Map();
 const makeEl = (id) => {
   const el = {
     id,
@@ -200,9 +235,13 @@ const sandbox = {
   navigator: { mediaDevices: { getUserMedia: async () => { throw new Error('测试环境没有麦克风'); } } },
   alert: () => {},
   document: {
+    // 按 id 缓存：真实 DOM 里同一个 id 永远是同一个节点，
+    // 不缓存的话就没法断言「代码真的把版本号写进了元素」。
     getElementById(id) {
       requestedIds.push(id);
-      return htmlIds.has(id) ? makeEl(id) : null;
+      if (!htmlIds.has(id)) return null;
+      if (!elCache.has(id)) elCache.set(id, makeEl(id));
+      return elCache.get(id);
     },
     createElement: () => makeEl('created'),
     createTextNode: () => ({}),
@@ -223,6 +262,21 @@ check('bundle 初始化不抛异常', !threw, threw ? `${threw.name}: ${threw.me
 
 const nullIds = requestedIds.filter((id) => !htmlIds.has(id));
 check('初始化时没有取到 null 的 DOM 节点', nullIds.length === 0, [...new Set(nullIds)].join(','));
+
+{
+  const ver = elCache.get('verText');
+  const detail = elCache.get('verDetail');
+  check(
+    '版本号已渲染到状态行',
+    !!ver && /^v\d+\.\d+\.\d+/.test(ver.textContent || ''),
+    ver ? ver.textContent : '（没取到元素）'
+  );
+  check(
+    '设备面板里的版本详情已渲染',
+    !!detail && (detail.textContent || '').includes('本机'),
+    detail ? detail.textContent : '（没取到元素）'
+  );
+}
 
 check(
   '导出的调试句柄存在',

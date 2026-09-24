@@ -46,6 +46,8 @@ const el = {
   meText: $('meText'),
   peerText: $('peerText'),
   rateText: $('rateText'),
+  verText: $('verText'),
+  verDetail: $('verDetail'),
   meterFill: $('meterFill'),
   bcastBar: $('bcastBar'),
   pinText: $('pinText'),
@@ -80,6 +82,15 @@ const el = {
 // 载波侦听门限。归一化能量 ≈ 幅度²（满幅正弦 ≈ 0.72）。
 // 原来 0.05（幅度 0.22）比解码门限还高得多，会出现"能解出对端却听不到它在发"的不一致，
 // 现在对齐到接近解码下限。
+/**
+ * 构建标识。build.mjs 会把 window.__BUILD__ 注入到单文件产物里；
+ * 开发页面（ES module 直接加载 src/）没有这个全局，退化成 dev。
+ * 显示 commit 短哈希是刻意的：版本号不变时，两个不同构建看起来仍然一样，
+ * 只有哈希能区分 —— 这正是「两台设备是不是同一个版本」需要的信息。
+ */
+const BUILD = (typeof window !== 'undefined' && window.__BUILD__) || { version: 'dev', stamp: '-' };
+const BUILD_TEXT = `v${BUILD.version}${BUILD.stamp && BUILD.stamp !== '-' ? ' · ' + BUILD.stamp : ''}`;
+
 const CARRIER_THRESHOLD = 0.02;
 /** 电平表刻度：低于这个电平基本解不出来，用颜色区分「有信号」和「纯噪声」 */
 const DECODE_LEVEL = 0.0009;
@@ -539,6 +550,12 @@ function setStatus(s, info = {}) {
 
 /* ============================ 启动 ============================ */
 
+function renderBuildInfo() {
+  el.verText.textContent = BUILD_TEXT;
+  el.verText.title = `构建版本 v${BUILD.version}，构建标识 ${BUILD.stamp}（内容哈希）`;
+  el.verDetail.textContent = `本机：v${BUILD.version} · ${BUILD.stamp}`;
+}
+
 function buildProfileSelect() {
   el.profile.innerHTML = '';
   for (const key of Object.keys(PROFILES)) {
@@ -655,7 +672,7 @@ function selfTest() {
   const ms = (performance.now() - t0).toFixed(0);
   const ok = out.length === 1 && bytesToText(out[0].payload) === text;
   const detail = ok
-    ? `✓ 自检通过 · ${p.label}档 · ${wav.length} 采样 · 解码 ${ms}ms`
+    ? `✓ 自检通过 · ${BUILD_TEXT} · ${p.label}档 · 解码 ${ms}ms`
     : `✗ 自检失败 · ${p.label}档 · 解出 ${out.length} 帧（应为 1 帧），请点「日志」看细节`;
   el.selfTestResult.className = ok ? 'ok' : 'err';
   el.selfTestResult.textContent = detail;
@@ -793,6 +810,7 @@ el.profile.addEventListener('change', () => {
 state.profileKey = LS.getItem('sc.profile') || DEFAULT_PROFILE;
 initIdentity();
 buildProfileSelect();
+renderBuildInfo();
 
 window.__soundchat = state;
 

@@ -220,6 +220,10 @@ ID 就会变，历史会断成"一台新设备"。这是这套方案的固有代
 
 在线地址：**https://mwumli.github.io/soundchat/**
 
+页面上会显示**构建标识**（状态行右侧和设备面板里），形如 `v0.2.0 · e86574a`。
+**两台设备的这个标识必须一致** —— 不一致说明其中一台加载了缓存的旧版本，强制刷新
+（Mac `Cmd+Shift+R`）即可。
+
 > ⚠️ 首次部署前需要**手动启用一次 Pages**：
 > **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**。
 > 不启用的话部署步骤会报 `Get Pages site failed ... 404`。
