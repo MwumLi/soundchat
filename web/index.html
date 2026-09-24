@@ -76,8 +76,19 @@
       .dot.err { background: var(--err); }
       .sub { color: var(--dim); font-size: 12px; margin-top: 6px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
       .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); color: var(--dim); }
-      #meter { width: 60px; height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; border: 1px solid var(--line); }
-      #meterFill { height: 100%; width: 0%; background: var(--ok); transition: width 80ms linear; }
+      /* 实时波形：比一根进度条信息量大得多 —— 能看出「有没有声音」而不只是「多大」 */
+      #waveMini { width: 84px; height: 22px; border: 1px solid var(--line); border-radius: 5px; background: #0b0d11; display: block; }
+      #waveBig { width: 100%; height: 140px; border: 1px solid var(--line); border-radius: 10px; background: #0b0d11; display: block; }
+      #micPanel { flex: 1 1 auto; overflow-y: auto; display: none; }
+      #micPanel.open { display: block; }
+      #micPanel .sheet-head {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 600;
+      }
+      #micPanel .sheet-head > span { margin-right: auto; }
+      #micPanel .sheet-body { padding: 12px 14px 16px; }
+      #micLevel { font: 600 13px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .note { color: var(--dim); font-size: 12px; line-height: 1.8; margin-top: 10px; }
 
       /* ---------- 广播横幅 ---------- */
       #bcastBar {
@@ -173,7 +184,7 @@
         <span class="pill" id="peerText">未连接</span>
         <span class="pill" id="rateText"></span>
         <span class="pill" id="verText" title="构建版本">v?</span>
-        <span id="meter"><span id="meterFill"></span></span>
+        <canvas id="waveMini" title="麦克风实时波形"></canvas>
       </div>
     </header>
 
@@ -185,6 +196,23 @@
     </div>
 
     <div id="chat"></div>
+
+    <!-- 麦克风测试（内联视图） -->
+    <div id="micPanel">
+      <div class="sheet-head">
+        <span>麦克风测试</span>
+        <span class="pill" id="micLevel">-∞ dB</span>
+        <button class="ghost" id="btnCloseMic">返回</button>
+      </div>
+      <div class="sheet-body">
+        <canvas id="waveBig"></canvas>
+        <div class="note">
+          <b>对着麦克风说句话</b>，波纹应该跟着动，声音越大波纹越高。<br />
+          波纹完全不动 = 麦克风没在工作（权限被拒 / 设备选错 / 系统静音）。<br />
+          说话有波纹但对方收不到 = 音量太小、距离太远，或对方的麦克风有问题。
+        </div>
+      </div>
+    </div>
 
     <!-- 设备视图（内联，占聊天区的位置；顶栏、状态行、日志都保持可见） -->
     <div id="devicePanel">
@@ -203,6 +231,15 @@
 
           <div class="section-title">已配对</div>
           <div id="peerList"></div>
+
+          <div class="section-title">诊断</div>
+          <div class="dev">
+            <div class="grow">
+              <div class="name">麦克风测试</div>
+              <div class="meta">说句话看波纹动不动</div>
+            </div>
+            <button id="btnMicTest">打开</button>
+          </div>
 
           <div class="section-title">关于</div>
           <div class="dev">
