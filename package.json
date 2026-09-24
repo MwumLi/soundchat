@@ -1,9 +1,9 @@
 {
-  "name": "dsh-soundchat",
+  "name": "soundchat",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "声波聊天：两台设备通过扬声器/麦克风互传文字，不依赖局域网与蓝牙",
+  "description": "声波传文字：扬声器 → 麦克风，不需要局域网 / 蓝牙 / 联网。自研 MFSK 物理层 + 停等 ARQ + 浏览器界面。",
   "scripts": {
     "test": "node test/modem.test.mjs && node test/protocol.test.mjs && node test/store.test.mjs && node test/bundle.test.mjs",
     "build": "node build.mjs",
@@ -12,5 +12,20 @@
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "license": "MIT",
+  "keywords": [
+    "data-over-sound",
+    "acoustic-communication",
+    "mfsk",
+    "web-audio",
+    "dsp",
+    "offline",
+    "no-network"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MwumLi/soundchat.git"
+  },
+  "homepage": "https://github.com/MwumLi/soundchat"
 }

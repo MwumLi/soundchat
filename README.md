@@ -1,6 +1,10 @@
 # 声波聊天 · SoundChat
 
-两台设备用**扬声器 → 麦克风**直接互传文字。不需要局域网、不需要蓝牙、不需要联网、不需要配对码。
+> 两台设备用**扬声器 → 麦克风**直接互传文字。不需要局域网、不需要蓝牙、不需要联网。
+>
+> Text chat over sound waves — speaker to microphone. No Wi-Fi, no Bluetooth, no internet.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ```
 设备甲                          设备乙
@@ -140,8 +144,8 @@ node build.mjs        # 生成 dist/soundchat.html（约 60 KB，零依赖、全
 
 两点提醒：
 
-- 记录是**明文**存在浏览器本地存储里的。如果这台机器受企业管控，浏览器数据可能在审计范围内——
-  传敏感内容前先想清楚。
+- 记录是**明文**存在浏览器本地存储里的。如果设备是公司配发的或装了管控软件，
+  浏览器数据可能在审计范围内——传敏感内容前先想清楚。
 - 记录**只在本机**，不会同步给对方、也不上传。
 
 **已知代价**：会话记录以对方的设备 ID 为主键。对方一旦**重置浏览器数据、换浏览器或用无痕模式**，
@@ -215,6 +219,7 @@ src/protocol.js     会话层：广播/扫描/连接、分片、ARQ、重组（�
 src/store.js        持久化层：会话记录按设备分组 + 已知设备（纯函数，注入 storage）
 src/app.js          浏览器：Web Audio 收发 + 界面
 docs/design.md      设计文档（唯一事实来源）
+LICENSE             MIT
 web/index.html      开发页面（HTML + CSS）
 build.mjs           把三个模块内联成单文件 dist/soundchat.html
 tools/cli.mjs       命令行：loopback / encode / decode
@@ -253,4 +258,8 @@ test/*.test.mjs     三套测试
 
 ## 许可
 
-仅供学习与内部实验使用。声波是广播信道，明文传输，请勿用于传递敏感信息。
+[MIT License](LICENSE) © MwumLi
+
+> ⚠️ 与许可证无关的一点提醒：声波是**广播信道**，当前实现**没有加密**。
+> 同一房间里任何设备都能解码你们的对话，不需要连接、也不需要 PIN。
+> PIN 只解决"谁能连上我"，不解决"谁能偷听我"。传敏感内容请自行加一层加密。
