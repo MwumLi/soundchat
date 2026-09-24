@@ -337,12 +337,25 @@ function renderDevices() {
   el.btnScan.classList.toggle('on', !!(s && s.scanning));
 }
 
+/**
+ * 设备面板做成「内联视图」而不是全屏浮层：
+ * 之前它 position:fixed 盖住整个屏幕，导致扫描时看不到电平表、也点不到「日志」，
+ * 而排查「为什么发现不了对方」恰恰需要这两样东西。
+ */
 function openDevices() {
   renderDevices();
-  el.devicePanel.classList.remove('hidden');
+  el.devicePanel.classList.add('open');
+  el.chat.classList.add('hidden');
+  el.btnDevices.classList.add('on');
 }
 function closeDevices() {
-  el.devicePanel.classList.add('hidden');
+  el.devicePanel.classList.remove('open');
+  el.chat.classList.remove('hidden');
+  el.btnDevices.classList.remove('on');
+}
+function toggleDevices() {
+  if (el.devicePanel.classList.contains('open')) closeDevices();
+  else openDevices();
 }
 
 /* ============================ PIN 弹窗 ============================ */
@@ -532,7 +545,8 @@ function updateRateText() {
   const p = PROFILES[state.profileKey];
   const fs = state.ctx ? state.ctx.sampleRate : 48000;
   const dur = frameDuration(p, buildFrame({ type: FRAME.MSG, payload: new Uint8Array(60) }));
-  el.rateText.textContent = `${p.symbolMs.toFixed(1)}ms/符号 · 60字节约 ${dur.toFixed(1)}s · ${fs}Hz`;
+  // 带上档位名：两台设备一眼比对，不用记「21.3ms = 稳健」这种对应关系
+  el.rateText.textContent = `${p.label}档 · ${p.symbolMs.toFixed(1)}ms/符号 · 60字节约 ${dur.toFixed(1)}s`;
 }
 
 async function boot() {
@@ -713,11 +727,8 @@ el.text.addEventListener('input', () => {
   el.text.style.height = `${Math.min(120, el.text.scrollHeight)}px`;
 });
 
-el.btnDevices.addEventListener('click', () => (el.devicePanel.classList.contains('hidden') ? openDevices() : closeDevices()));
+el.btnDevices.addEventListener('click', toggleDevices);
 el.btnCloseDevices.addEventListener('click', closeDevices);
-el.devicePanel.addEventListener('click', (e) => {
-  if (e.target === el.devicePanel) closeDevices();
-});
 
 el.btnScan.addEventListener('click', () => {
   if (!state.session) return;

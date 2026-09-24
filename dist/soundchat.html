@@ -114,14 +114,20 @@
       #text { flex: 1 1 auto; resize: none; min-height: 40px; max-height: 120px; padding: 9px 11px; line-height: 1.4; }
       #send { flex: none; height: 40px; padding: 0 18px; }
 
-      /* ---------- 浮层通用 ---------- */
-      .sheet, .modal { position: fixed; inset: 0; z-index: 40; background: rgba(8, 10, 14, 0.72); display: flex; }
-      .sheet { flex-direction: column; justify-content: flex-end; }
-      .modal { align-items: center; justify-content: center; padding: 24px; }
-      .sheet-box { background: var(--panel); border-radius: 16px 16px 0 0; max-height: 82dvh; display: flex; flex-direction: column; width: 100%; }
-      .sheet-head { display: flex; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); font-weight: 600; }
-      .sheet-head span { margin-right: auto; }
-      .sheet-body { overflow-y: auto; padding: 12px 14px calc(16px + env(safe-area-inset-bottom)) 14px; }
+      /* ---------- PIN 弹窗（这个该是模态） ---------- */
+      .modal { position: fixed; inset: 0; z-index: 46; background: rgba(8, 10, 14, 0.72); display: flex; align-items: center; justify-content: center; padding: 24px; }
+
+      /* ---------- 设备视图（内联，不盖顶栏 / 电平表 / 日志） ----------
+         之前它是 position:fixed 的全屏浮层，扫描时看不到电平表也点不到「日志」，
+         而排查「为什么发现不了对方」恰恰就要这两样。 */
+      #devicePanel { flex: 1 1 auto; overflow-y: auto; display: none; }
+      #devicePanel.open { display: block; }
+      #devicePanel .sheet-head {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 600;
+      }
+      #devicePanel .sheet-head > span { margin-right: auto; }
+      #devicePanel .sheet-body { padding: 12px 14px 16px; }
       .modal-box { background: var(--panel); border-radius: 14px; padding: 18px; width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 12px; }
       .section-title { font-size: 12px; color: var(--dim); margin: 14px 0 8px; }
       .section-title:first-child { margin-top: 0; }
@@ -178,22 +184,15 @@
     </div>
 
     <div id="chat"></div>
-    <div id="logPanel"></div>
 
-    <footer>
-      <textarea id="text" placeholder="输入要发送的文字…" rows="1"></textarea>
-      <button class="primary" id="send">发送</button>
-    </footer>
-
-    <!-- 设备面板 -->
-    <div id="devicePanel" class="sheet hidden">
-      <div class="sheet-box">
-        <div class="sheet-head">
-          <span>设备</span>
-          <select id="profile" title="传输档位"></select>
-          <button class="ghost" id="btnCloseDevices">关闭</button>
-        </div>
-        <div class="sheet-body">
+    <!-- 设备视图（内联，占聊天区的位置；顶栏、状态行、日志都保持可见） -->
+    <div id="devicePanel">
+      <div class="sheet-head">
+        <span>设备</span>
+        <select id="profile" title="传输档位"></select>
+        <button class="ghost" id="btnCloseDevices">返回</button>
+      </div>
+      <div class="sheet-body">
           <div class="section-title">可连接设备</div>
           <div class="row">
             <button id="btnScan">检测设备</button>
@@ -206,10 +205,15 @@
 
           <div class="section-title">其他</div>
           <button class="ghost" id="btnClearAll">清空全部聊天记录</button>
-          <div class="hint" style="margin-top: 6px">只影响本机浏览器里的记录，不影响对方。</div>
-        </div>
+        <div class="hint" style="margin-top: 6px">只影响本机浏览器里的记录，不影响对方。</div>
       </div>
     </div>
+    <div id="logPanel"></div>
+
+    <footer>
+      <textarea id="text" placeholder="输入要发送的文字…" rows="1"></textarea>
+      <button class="primary" id="send">发送</button>
+    </footer>
 
     <!-- PIN 输入 -->
     <div id="pinModal" class="modal hidden">
@@ -1142,6 +1146,7 @@ class ChatSession {
     this.activePeer = 0;
     this.connecting = null;
     this.carrierBusy = false;
+    this.beaconCount = 0;
 
     /* ---- 定时器 ---- */
     this.beaconTimer = null;
@@ -1195,6 +1200,7 @@ class ChatSession {
     this.pin = Math.floor(this._rand() * 10000) % 10000;
     this.pinErrors = 0;
     this.broadcasting = true;
+    this.beaconCount = 0;
     this.onPin(this.pin);
     this._log('info', `开始广播，PIN=${this.pad4(this.pin)}（只显示在本机屏幕上，不会进入声波）`);
     this._emitStatus();
@@ -1227,6 +1233,8 @@ class ChatSession {
       }, this.deferMs);
       return;
     }
+    this.beaconCount++;
+    this._log('tx', `发送广播（第 ${this.beaconCount} 次）`);
     this._delayedSend(() => this._beaconFrame()).then(() => {
       if (!this.broadcasting) return;
       // 静默窗口：B 的连接请求要落在这里
@@ -1372,6 +1380,9 @@ class ChatSession {
       return;
     }
     if (frame.dst !== 0 && frame.dst !== this.myId) return;
+
+    // 每收到一帧都记一行。排障时最关键的一条：能区分「根本没收到」和「收到了但没处理」。
+    this._log('rx', `收到 ${this._typeName(frame.type)} src=${frame.src} ${frame.payload.length}B`);
 
     switch (frame.type) {
       case FRAME.BEACON:
@@ -1754,6 +1765,12 @@ class ChatSession {
       this._lastTxEndAt = this._now();
       if (this.state === STATE.TX) this._setState(STATE.IDLE);
     }
+  }
+
+  /** 帧类型名（日志用） */
+  _typeName(type) {
+    for (const k of Object.keys(FRAME)) if (FRAME[k] === type) return k;
+    return `0x${type.toString(16)}`;
   }
 
   _nextSeq() {
@@ -2250,12 +2267,25 @@ function renderDevices() {
   el.btnScan.classList.toggle('on', !!(s && s.scanning));
 }
 
+/**
+ * 设备面板做成「内联视图」而不是全屏浮层：
+ * 之前它 position:fixed 盖住整个屏幕，导致扫描时看不到电平表、也点不到「日志」，
+ * 而排查「为什么发现不了对方」恰恰需要这两样东西。
+ */
 function openDevices() {
   renderDevices();
-  el.devicePanel.classList.remove('hidden');
+  el.devicePanel.classList.add('open');
+  el.chat.classList.add('hidden');
+  el.btnDevices.classList.add('on');
 }
 function closeDevices() {
-  el.devicePanel.classList.add('hidden');
+  el.devicePanel.classList.remove('open');
+  el.chat.classList.remove('hidden');
+  el.btnDevices.classList.remove('on');
+}
+function toggleDevices() {
+  if (el.devicePanel.classList.contains('open')) closeDevices();
+  else openDevices();
 }
 
 /* ============================ PIN 弹窗 ============================ */
@@ -2445,7 +2475,8 @@ function updateRateText() {
   const p = PROFILES[state.profileKey];
   const fs = state.ctx ? state.ctx.sampleRate : 48000;
   const dur = frameDuration(p, buildFrame({ type: FRAME.MSG, payload: new Uint8Array(60) }));
-  el.rateText.textContent = `${p.symbolMs.toFixed(1)}ms/符号 · 60字节约 ${dur.toFixed(1)}s · ${fs}Hz`;
+  // 带上档位名：两台设备一眼比对，不用记「21.3ms = 稳健」这种对应关系
+  el.rateText.textContent = `${p.label}档 · ${p.symbolMs.toFixed(1)}ms/符号 · 60字节约 ${dur.toFixed(1)}s`;
 }
 
 async function boot() {
@@ -2626,11 +2657,8 @@ el.text.addEventListener('input', () => {
   el.text.style.height = `${Math.min(120, el.text.scrollHeight)}px`;
 });
 
-el.btnDevices.addEventListener('click', () => (el.devicePanel.classList.contains('hidden') ? openDevices() : closeDevices()));
+el.btnDevices.addEventListener('click', toggleDevices);
 el.btnCloseDevices.addEventListener('click', closeDevices);
-el.devicePanel.addEventListener('click', (e) => {
-  if (e.target === el.devicePanel) closeDevices();
-});
 
 el.btnScan.addEventListener('click', () => {
   if (!state.session) return;

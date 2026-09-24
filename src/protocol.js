@@ -132,6 +132,7 @@ export class ChatSession {
     this.activePeer = 0;
     this.connecting = null;
     this.carrierBusy = false;
+    this.beaconCount = 0;
 
     /* ---- 定时器 ---- */
     this.beaconTimer = null;
@@ -185,6 +186,7 @@ export class ChatSession {
     this.pin = Math.floor(this._rand() * 10000) % 10000;
     this.pinErrors = 0;
     this.broadcasting = true;
+    this.beaconCount = 0;
     this.onPin(this.pin);
     this._log('info', `开始广播，PIN=${this.pad4(this.pin)}（只显示在本机屏幕上，不会进入声波）`);
     this._emitStatus();
@@ -217,6 +219,8 @@ export class ChatSession {
       }, this.deferMs);
       return;
     }
+    this.beaconCount++;
+    this._log('tx', `发送广播（第 ${this.beaconCount} 次）`);
     this._delayedSend(() => this._beaconFrame()).then(() => {
       if (!this.broadcasting) return;
       // 静默窗口：B 的连接请求要落在这里
@@ -362,6 +366,9 @@ export class ChatSession {
       return;
     }
     if (frame.dst !== 0 && frame.dst !== this.myId) return;
+
+    // 每收到一帧都记一行。排障时最关键的一条：能区分「根本没收到」和「收到了但没处理」。
+    this._log('rx', `收到 ${this._typeName(frame.type)} src=${frame.src} ${frame.payload.length}B`);
 
     switch (frame.type) {
       case FRAME.BEACON:
@@ -744,6 +751,12 @@ export class ChatSession {
       this._lastTxEndAt = this._now();
       if (this.state === STATE.TX) this._setState(STATE.IDLE);
     }
+  }
+
+  /** 帧类型名（日志用） */
+  _typeName(type) {
+    for (const k of Object.keys(FRAME)) if (FRAME[k] === type) return k;
+    return `0x${type.toString(16)}`;
   }
 
   _nextSeq() {

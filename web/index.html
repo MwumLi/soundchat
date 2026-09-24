@@ -114,14 +114,20 @@
       #text { flex: 1 1 auto; resize: none; min-height: 40px; max-height: 120px; padding: 9px 11px; line-height: 1.4; }
       #send { flex: none; height: 40px; padding: 0 18px; }
 
-      /* ---------- 浮层通用 ---------- */
-      .sheet, .modal { position: fixed; inset: 0; z-index: 40; background: rgba(8, 10, 14, 0.72); display: flex; }
-      .sheet { flex-direction: column; justify-content: flex-end; }
-      .modal { align-items: center; justify-content: center; padding: 24px; }
-      .sheet-box { background: var(--panel); border-radius: 16px 16px 0 0; max-height: 82dvh; display: flex; flex-direction: column; width: 100%; }
-      .sheet-head { display: flex; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); font-weight: 600; }
-      .sheet-head span { margin-right: auto; }
-      .sheet-body { overflow-y: auto; padding: 12px 14px calc(16px + env(safe-area-inset-bottom)) 14px; }
+      /* ---------- PIN 弹窗（这个该是模态） ---------- */
+      .modal { position: fixed; inset: 0; z-index: 46; background: rgba(8, 10, 14, 0.72); display: flex; align-items: center; justify-content: center; padding: 24px; }
+
+      /* ---------- 设备视图（内联，不盖顶栏 / 电平表 / 日志） ----------
+         之前它是 position:fixed 的全屏浮层，扫描时看不到电平表也点不到「日志」，
+         而排查「为什么发现不了对方」恰恰就要这两样。 */
+      #devicePanel { flex: 1 1 auto; overflow-y: auto; display: none; }
+      #devicePanel.open { display: block; }
+      #devicePanel .sheet-head {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 600;
+      }
+      #devicePanel .sheet-head > span { margin-right: auto; }
+      #devicePanel .sheet-body { padding: 12px 14px 16px; }
       .modal-box { background: var(--panel); border-radius: 14px; padding: 18px; width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 12px; }
       .section-title { font-size: 12px; color: var(--dim); margin: 14px 0 8px; }
       .section-title:first-child { margin-top: 0; }
@@ -178,22 +184,15 @@
     </div>
 
     <div id="chat"></div>
-    <div id="logPanel"></div>
 
-    <footer>
-      <textarea id="text" placeholder="输入要发送的文字…" rows="1"></textarea>
-      <button class="primary" id="send">发送</button>
-    </footer>
-
-    <!-- 设备面板 -->
-    <div id="devicePanel" class="sheet hidden">
-      <div class="sheet-box">
-        <div class="sheet-head">
-          <span>设备</span>
-          <select id="profile" title="传输档位"></select>
-          <button class="ghost" id="btnCloseDevices">关闭</button>
-        </div>
-        <div class="sheet-body">
+    <!-- 设备视图（内联，占聊天区的位置；顶栏、状态行、日志都保持可见） -->
+    <div id="devicePanel">
+      <div class="sheet-head">
+        <span>设备</span>
+        <select id="profile" title="传输档位"></select>
+        <button class="ghost" id="btnCloseDevices">返回</button>
+      </div>
+      <div class="sheet-body">
           <div class="section-title">可连接设备</div>
           <div class="row">
             <button id="btnScan">检测设备</button>
@@ -206,10 +205,15 @@
 
           <div class="section-title">其他</div>
           <button class="ghost" id="btnClearAll">清空全部聊天记录</button>
-          <div class="hint" style="margin-top: 6px">只影响本机浏览器里的记录，不影响对方。</div>
-        </div>
+        <div class="hint" style="margin-top: 6px">只影响本机浏览器里的记录，不影响对方。</div>
       </div>
     </div>
+    <div id="logPanel"></div>
+
+    <footer>
+      <textarea id="text" placeholder="输入要发送的文字…" rows="1"></textarea>
+      <button class="primary" id="send">发送</button>
+    </footer>
 
     <!-- PIN 输入 -->
     <div id="pinModal" class="modal hidden">

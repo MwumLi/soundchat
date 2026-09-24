@@ -195,7 +195,7 @@ group('1. 默认静默：「开始使用」不发声');
 group('2. 扫描开关：没点「检测设备」就不显示');
 
 {
-  const { clock, stats, a, b } = setupPair();
+  const { clock, stats, a, b, logs } = setupPair();
   a.session.start();
   b.session.start();
   a.session.startBroadcast();
@@ -207,6 +207,11 @@ group('2. 扫描开关：没点「检测设备」就不显示');
   b.session.startScan();
   await clock.advance(12000);
   check('B 开始扫描 → 发现 A', b.session.discovered.size === 1, `列表 ${b.session.discovered.size} 项`);
+  check(
+    'B 的日志里有「收到 BEACON」（排障关键行）',
+    logs.b.some((l) => l.text.includes('收到 BEACON')),
+    logs.b.find((l) => l.text.includes('收到 BEACON'))?.text || '（没有）'
+  );
   const dev = b.session.discovered.get(1);
   check('发现项带昵称', dev && dev.name === '甲', dev && dev.name);
   check('发现项带信号强度', dev && typeof dev.snr === 'number', dev && `snr=${dev.snr?.toFixed(1)}`);
@@ -217,7 +222,7 @@ group('2. 扫描开关：没点「检测设备」就不显示');
 group('3. 广播节奏：周期性发声 + 静默窗口');
 
 {
-  const { clock, stats, a } = setupPair();
+  const { clock, stats, a, logs } = setupPair();
   a.session.start();
   a.session.startBroadcast();
   await clock.advance(20000);
@@ -227,6 +232,8 @@ group('3. 广播节奏：周期性发声 + 静默窗口');
   check('持续广播（20 秒内 >= 3 次）', times.length >= 3, `共 ${times.length} 次`);
   check('间隔约等于 发声时长 + 静默 2.8s', avg > 3000 && avg < 4500, `平均间隔 ${Math.round(avg)}ms`);
   check('PIN 已生成', typeof a.session.pin === 'number' && a.session.pin >= 0 && a.session.pin <= 9999, `PIN=${a.session.pad4(a.session.pin)}`);
+  const beaconLogs = logs.a.filter((l) => l.text.includes('发送广播（第'));
+  check('A 的日志每次广播都记一行', beaconLogs.length >= 3, beaconLogs.map((l) => l.text).slice(0, 3).join(' / '));
 }
 
 /* ============================ 4. 连接成功 ============================ */
