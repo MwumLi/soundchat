@@ -109,6 +109,8 @@ const state = {
   viewPeer: 0, // 当前显示的会话
   pinTarget: 0, // PIN 弹窗正在连的设备
   lastClipWarn: 0,
+  lastLevelLog: 0,
+  peakLevel: 0,
 };
 
 /** localStorage / sessionStorage 的安全包装（隐私模式下会抛） */
@@ -455,6 +457,24 @@ async function startAudio() {
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
   });
 
+  // getUserMedia 里的约束可能被浏览器忽略（移动端尤其常见），
+  // 再用 applyConstraints 重申一次，并**把实际生效的参数记下来** ——
+  // 如果手机报 noiseSuppression: true，那 FSK 载波会被当噪声削掉，这是关键线索。
+  const track = state.stream.getAudioTracks ? state.stream.getAudioTracks()[0] : null;
+  if (track) {
+    try {
+      await track.applyConstraints({ echoCancellation: false, noiseSuppression: false, autoGainControl: false });
+    } catch (e) {
+      addLog('warn', `applyConstraints 失败：${e.message}`);
+    }
+    const st = track.getSettings ? track.getSettings() : {};
+    const on = (v) => (v === true ? '开（⚠️ 会削弱信号）' : v === false ? '关' : '未知');
+    addLog(
+      'info',
+      `麦克风实际参数：降噪 ${on(st.noiseSuppression)}，回声消除 ${on(st.echoCancellation)}，自动增益 ${on(st.autoGainControl)}`
+    );
+  }
+
   const src = state.ctx.createMediaStreamSource(state.stream);
   const gain = state.ctx.createGain();
   gain.gain.value = MIC_GAIN;
@@ -485,6 +505,21 @@ function onAudio(e) {
   if (raw > 0.95 && Date.now() - state.lastClipWarn > 8000) {
     state.lastClipWarn = Date.now();
     addLog('warn', '输入电平接近满幅，可能削波失真；同机双开时请把音量调小一些');
+  }
+
+  // 电平监测：只在「扫描 / 广播 / 连接」阶段记，聊天时不记（否则刷屏）。
+  // 这是判断「麦克风到底有没有收到声音」最直接的依据 ——
+  // 静音不记，避免安静环境下刷屏。
+  if (raw > state.peakLevel) state.peakLevel = raw;
+  const nowMs = Date.now();
+  const active = state.session.scanning || state.session.broadcasting || state.session.connecting;
+  if (active && nowMs - state.lastLevelLog > 3000) {
+    const peak = state.peakLevel;
+    if (peak > 3e-6) {
+      addLog('info', `信号电平 ${(10 * Math.log10(peak)).toFixed(0)} dB（近 3 秒麦克风收到的最强信号）`);
+    }
+    state.lastLevelLog = nowMs;
+    state.peakLevel = 0;
   }
 }
 
