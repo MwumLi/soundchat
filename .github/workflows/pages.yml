@@ -33,11 +33,18 @@ jobs:
           node build.mjs
           cp dist/soundchat.html dist/index.html
 
-      # enablement: true —— 仓库还没在 Settings → Pages 里启用时，让它自动启用。
-      # 不加这个参数，首次部署会直接报 "Get Pages site failed"。
+      # 首次部署前，仓库必须先启用 Pages：
+      #   Settings → Pages → Build and deployment → Source 选 **GitHub Actions**
+      # 没启用的话这一步会报 "Get Pages site failed ... 404"。
+      #
+      # 想让它自动启用也可以，但 configure-pages 官方说明明确写了
+      # enablement「requires a token other than GITHUB_TOKEN」——
+      # 默认 token 权限不够。所以这里做成可选的：配了 PAGES_PAT 就自动启用，
+      # 没配就用默认 token（需要你手动点一下上面那个开关）。
       - uses: actions/configure-pages@v5
         with:
-          enablement: true
+          token: ${{ secrets.PAGES_PAT || github.token }}
+          enablement: ${{ secrets.PAGES_PAT != '' }}
 
       - uses: actions/upload-pages-artifact@v3
         with:

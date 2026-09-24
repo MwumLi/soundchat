@@ -209,6 +209,25 @@ ID 就会变，历史会断成"一台新设备"。这是这套方案的固有代
 9. **麦克风权限**。浏览器只在安全上下文（`https://` 或 `localhost`）下给麦克风权限，
    这决定了手机端必须先解决"文件怎么到手机上"这一步。
 
+## 部署
+
+仓库已配置 GitHub Actions：
+
+| 工作流 | 作用 |
+|---|---|
+| `.github/workflows/ci.yml` | push / PR 时在 Node 18 / 20 / 22 上跑全部测试，并产出单文件 artifact |
+| `.github/workflows/pages.yml` | push 到 `main` 时先跑测试，绿了再构建并部署到 GitHub Pages |
+
+在线地址：**https://mwumli.github.io/soundchat/**
+
+> ⚠️ 首次部署前需要**手动启用一次 Pages**：
+> **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**。
+> 不启用的话部署步骤会报 `Get Pages site failed ... 404`。
+>
+> 想让工作流自动启用也可以，但需要建一个带 `repo` 权限的 Personal Access Token
+> 存为仓库 secret `PAGES_PAT`——`configure-pages` 的 `enablement` 参数
+> **不能使用默认的 `GITHUB_TOKEN`**。
+
 ## 开发
 
 ```bash

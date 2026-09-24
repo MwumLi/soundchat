@@ -172,6 +172,25 @@ an acoustic channel, not an implementation limit.
 8. **Microphone permissions** require a secure context, which is why the phone workflow
    starts with "get the file onto the phone".
 
+## Deployment
+
+Two workflows are configured:
+
+| Workflow | What it does |
+|---|---|
+| `.github/workflows/ci.yml` | Runs the full test suite on Node 18 / 20 / 22 for pushes and PRs, and uploads the single-file build as an artifact |
+| `.github/workflows/pages.yml` | On push to `main`: run tests, then build and deploy to GitHub Pages |
+
+Live: **https://mwumli.github.io/soundchat/**
+
+> ⚠️ Pages must be enabled **once**, manually:
+> **Settings → Pages → Build and deployment → Source** → **GitHub Actions**.
+> Otherwise the deploy step fails with `Get Pages site failed ... 404`.
+>
+> The workflow can also enable it automatically, but that requires a Personal Access
+> Token with `repo` scope stored as the `PAGES_PAT` secret — `configure-pages`'
+> `enablement` option **cannot use the default `GITHUB_TOKEN`**.
+
 ## Development
 
 ```bash
